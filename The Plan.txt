@@ -1,0 +1,31 @@
+Create a browser based "Taste test" application.
+
+A few times a year, a group of friends and myself get together to taste test a selection of foods.  Generally crisps, sometimes chocolates, but could be anything really. Only one person knows what the flavour of the product is printed on the packet - so its essentially a blind test.  even the person putting the samples in the bowls to hand out has the packet covered so they don't know for certain the exact flavour and brand at the point of testing.
+
+we each in tern sample a small piece of the food.  we then attempt to guess the flavour and score the product on 2 values: "niceness" and "authenticity".  the score is out of 5 and needs to be selectable in settings if "half" points are allowed.  the 2 scores are important.  niceness disregards if the product actually tastes as per its packet description - its just how nice it is!  Authenticity then rates the product for how close it matches the description regardless of whether the taser likes it or not.
+
+We go round and round tasting the selection and scoring after each round.  Once complete we analyse the results, rank the proucts by authenticity, niceness etc.  we also analyse the tasters to see how generous they were etc.  lovely lots of stats - graphs, pie charts etc etc. 
+
+There can be any number of tasters taking part in the test.
+
+Id like to use Google sheets with a deployed appscript to store data.
+
+Id then like the app to be full stack html which i'll host on my GitHub account.  id like to be able to look at past test as well as maybe see combined results of previous tests - maybe even select a sample of past tests.  i.e be able to compare tests of the same products over a number of years.
+
+other key features are to be able to have tester login so as they score, their score gets logged against them. we need to be able to create a testing session, create users and login in for existing users, create products, assign products to a new test, and users etc... a sort of setup process before tasting gets underway.
+
+during the test have a live results view with maybe a popup window to add your star score for each actual test.
+
+allow users to comment with their score.
+
+for products we will need a name, manufacturer, type (choc, crisp etc types to be created separately), manufacturers description etc.  perhaps a year as well for the product (in case its wines etc. or even crisps can vary by year. chocolate certainly can.  maybe call it the vintage!).  We will need the test date.
+
+For a live taste test, for those logged in to take part, the lead tester will select the product being tested. logged in testers will then get a modal headed something like "test sample". they enter their scores and make a comment.  this is logged against a "sample number".  only after that sample is complete will the sample number link back to reveal the product actually tested.  a phot of the product would be great if possible to link!
+
+Thinking abiout it, the sequence of events for the test do involve the taster being told what the product is after the initial taste (to get niceness).  they need to know what it is to get the authenticity.
+
+So, the test creator needs to create the test via a model.  the add products - either existing from the database or a new one.  normal tasters can then chose to join an active test (multiple could be happening at once). the tester can only be in one test at a time.  they then enter a test lobby waiting for the test to begin.  the orgabiser can see who is in the lobby.  when eardy, all products in the organiser test list and all participants in their list, they start the test.  tester can then see the first "taste sample".  not the catual product name... justa the sample number.  they enter a star rating for niceness and comment if they wish.  the organisr can see a list of tasters still to still to score.  when all niceness scores are in, the organiser can reveal the actual product (tester modal changes to show the product name), then tester can give a star rating for authenticity.  the organiser can see a list of participants still to score.  when all authenticity scores are in, the round is over and the organiser can move on to the next product to sample.  and so on until all products have been tested.
+
+when complete, the testing modal goes away and a result page appears.  ranking the products for niceness, authenticity and total etc.  any other cool stats too.  tester speed of response! etec etc.  fun facts and stats.
+
+In the stats maybe have a hypersphere for users.  typical scores given for niceness and autheicity, speed of response etc. hypershere measure being percentile maybe?
