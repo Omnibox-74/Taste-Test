@@ -281,16 +281,278 @@
     }
   });
 
+  // ─── Product library ─────────────────────────────────────────────────────
+  Object.assign(state, { types: [], products: [], filter: 'all', search: '' });
+  let pendingPhoto = null;
+
+  $('#open-products').addEventListener('click', goProducts);
+  $('#products-back').addEventListener('click', goHome);
+  $('#add-product').addEventListener('click', () => openProduct(null));
+  $('#add-type').addEventListener('click', () => openType(null));
+
+  async function goProducts() {
+    show('screen-products');
+    $('#product-grid').innerHTML = '<p class="loading">Fetching the library…</p>';
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      $('#product-grid').innerHTML = `<p class="error">${esc(e.message)}</p>`;
+      return;
+    }
+    if (state.filter !== 'all' && !state.types.some(t => t.typeId === state.filter)) state.filter = 'all';
+    renderLibrary();
+  }
+
+  const typeOf = id => state.types.find(t => t.typeId === id) || { name: 'No type', icon: '❔' };
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+  function renderLibrary() {
+    const counts = {};
+    state.products.forEach(p => { counts[p.typeId] = (counts[p.typeId] || 0) + 1; });
+
+    $('#type-filter').innerHTML = [{ typeId: 'all', name: 'All', icon: '' }, ...state.types].map(t => {
+      const on = state.filter === t.typeId;
+      return `<button type="button" class="chip${on ? ' chip--on' : ''}" data-id="${esc(t.typeId)}" aria-pressed="${on}">${t.icon ? esc(t.icon) + ' ' : ''}${esc(t.name)}</button>`;
+    }).join('');
+
+    const q = state.search.toLowerCase();
+    const list = state.products.filter(p =>
+      (state.filter === 'all' || p.typeId === state.filter) &&
+      (!q || [p.name, p.manufacturer, p.vintage, p.productLine].join(' ').toLowerCase().includes(q)));
+
+    $('#product-grid').innerHTML = list.length
+      ? list.map(productCard).join('')
+      : `<p class="empty">${state.products.length ? 'Nothing matches that.' : 'The library is empty. Add the first thing you plan to taste.'}</p>`;
+
+    $('#type-list').innerHTML = state.types.map(t => `
+      <li>
+        <span class="taster__emoji" aria-hidden="true">${esc(t.icon)}</span>
+        <span class="user-name">${esc(t.name)} <span class="muted">${plural(counts[t.typeId] || 0, 'product')}</span></span>
+        <span class="user-actions">
+          <button class="link" data-act="edit" data-id="${esc(t.typeId)}">Edit</button>
+          <button class="link link--danger" data-act="delete" data-id="${esc(t.typeId)}">Delete</button>
+        </span>
+      </li>`).join('') || '<li class="empty">No types yet.</li>';
+  }
+
+  function productCard(p) {
+    const t = typeOf(p.typeId);
+    const pic = p.photoUrl
+      ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+      : `<span class="product__icon" aria-hidden="true">${esc(t.icon)}</span>`;
+    return `
+      <button type="button" class="product" data-id="${esc(p.productId)}">
+        <span class="product__pic">${pic}</span>
+        <span class="product__name">${esc(p.name)}</span>
+        <span class="product__meta">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
+      </button>`;
+  }
+
+  $('#type-filter').addEventListener('click', e => {
+    const b = e.target.closest('.chip');
+    if (b) { state.filter = b.dataset.id; renderLibrary(); }
+  });
+
+  $('#product-search').addEventListener('input', e => { state.search = e.target.value.trim(); renderLibrary(); });
+
+  $('#product-grid').addEventListener('click', e => {
+    const b = e.target.closest('.product');
+    if (b) openProduct(state.products.find(p => p.productId === b.dataset.id));
+  });
+
+  function openProduct(p) {
+    if (!state.types.length) return toast('Add a type first, like Crisps');
+    pendingPhoto = null;
+    const v = p || {
+      name: '', manufacturer: '', description: '', productLine: '', photoUrl: '',
+      typeId: state.filter !== 'all' ? state.filter : state.types[0].typeId,
+      vintage: String(new Date().getFullYear())
+    };
+    const lines = [...new Set(state.products.map(x => x.productLine).filter(Boolean))].sort();
+
+    openDialog({
+      title: p ? 'Edit product' : 'Add a product',
+      ok: p ? 'Save changes' : 'Add product',
+      wide: true,
+      body: `
+        <div class="photo">
+          <div class="photo__preview" id="photo-preview"></div>
+          <div class="photo__actions">
+            <label class="btn btn--ghost photo__pick">Take or choose a photo
+              <input type="file" id="photo-file" accept="image/*" hidden>
+            </label>
+            <button type="button" class="link" id="photo-remove">Remove photo</button>
+          </div>
+        </div>
+        <input type="hidden" name="photoUrl" value="${esc(v.photoUrl)}">
+        <label>Name<input name="name" maxlength="60" value="${esc(v.name)}" placeholder="Prawn Cocktail"></label>
+        <label>Manufacturer<input name="manufacturer" maxlength="60" value="${esc(v.manufacturer)}" placeholder="Walkers"></label>
+        <div class="two">
+          <label>Type
+            <select name="typeId">${state.types.map(t =>
+              `<option value="${esc(t.typeId)}"${t.typeId === v.typeId ? ' selected' : ''}>${esc(t.icon)} ${esc(t.name)}</option>`).join('')}
+            </select>
+          </label>
+          <label>Vintage<input name="vintage" maxlength="20" value="${esc(v.vintage)}"></label>
+        </div>
+        <label>Product line <span class="hint">Links the same product across vintages</span>
+          <input name="productLine" maxlength="80" list="line-list" value="${esc(v.productLine)}">
+          <datalist id="line-list">${lines.map(l => `<option value="${esc(l)}">`).join('')}</datalist>
+        </label>
+        <label>Manufacturer's description
+          <textarea name="description" rows="4" maxlength="1500" placeholder="What the packet promises">${esc(v.description)}</textarea>
+        </label>
+        ${p ? '<button type="button" class="link link--danger" id="product-delete">Delete this product</button>' : ''}`,
+
+      onOpen: body => {
+        const hidden = body.querySelector('[name=photoUrl]');
+        const fileInput = body.querySelector('#photo-file');
+        const paint = src => {
+          body.querySelector('#photo-preview').innerHTML = src
+            ? `<img src="${esc(src)}" alt="Product photo" referrerpolicy="no-referrer">`
+            : '<span>No photo yet</span>';
+          body.querySelector('#photo-remove').hidden = !src;
+        };
+        paint(v.photoUrl);
+
+        fileInput.addEventListener('change', async () => {
+          const file = fileInput.files[0];
+          if (!file) return;
+          try {
+            pendingPhoto = await shrinkImage(file);
+            paint(pendingPhoto);
+          } catch (x) {
+            $('#dialog-error').textContent = "Couldn't read that photo. Try a different one.";
+          }
+        });
+
+        body.querySelector('#photo-remove').addEventListener('click', () => {
+          pendingPhoto = null;
+          hidden.value = '';
+          fileInput.value = '';
+          paint('');
+        });
+
+        // Suggest a product line from maker + name while it's left blank
+        const nameI = body.querySelector('[name=name]');
+        const makerI = body.querySelector('[name=manufacturer]');
+        const lineI = body.querySelector('[name=productLine]');
+        const suggest = () => { lineI.placeholder = `${makerI.value} ${nameI.value}`.trim() || 'Walkers Prawn Cocktail'; };
+        nameI.addEventListener('input', suggest);
+        makerI.addEventListener('input', suggest);
+        suggest();
+
+        const del = body.querySelector('#product-delete');
+        if (del) del.addEventListener('click', async () => {
+          if (!confirm(`Delete ${p.name}? This can't be undone.`)) return;
+          try {
+            await Api.call('deleteProduct', { productId: p.productId });
+            $('#dialog').close();
+            toast(`${p.name} deleted`);
+            goProducts();
+          } catch (x) {
+            $('#dialog-error').textContent = x.message;
+          }
+        });
+      },
+
+      onOk: async f => {
+        const data = Object.fromEntries(f.entries());
+        if (!data.name.trim() || !data.manufacturer.trim()) throw new Error('Add a name and a manufacturer.');
+
+        if (pendingPhoto) {
+          $('#dialog-ok').textContent = 'Uploading photo…';
+          const up = await Api.call('uploadPhoto', {
+            dataUrl: pendingPhoto,
+            name: `${data.manufacturer} ${data.name} ${data.vintage}`
+          });
+          pendingPhoto = null;
+          data.photoUrl = up.url;
+          $('#dialog-form [name=photoUrl]').value = up.url;   // reused if the save below fails
+          $('#dialog-ok').textContent = 'Saving…';
+        }
+        if (p) data.productId = p.productId;
+
+        const saved = await Api.call('saveProduct', data);
+        toast(p ? 'Changes saved' : `${saved.name} added`);
+        goProducts();
+      }
+    });
+  }
+
+  // Resize photos in the browser so uploads stay small and quick
+  async function shrinkImage(file, max = 1200, quality = 0.82) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = reject;
+        i.src = url;
+      });
+      const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * scale);
+      c.height = Math.round(img.naturalHeight * scale);
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', quality);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  // ─── Types ───────────────────────────────────────────────────────────────
+  $('#type-list').addEventListener('click', e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const t = state.types.find(x => x.typeId === b.dataset.id);
+
+    if (b.dataset.act === 'edit') openType(t);
+    if (b.dataset.act === 'delete') {
+      openDialog({
+        title: `Delete ${t.name}?`,
+        body: '<p>Types can only be deleted once no products use them.</p>',
+        ok: 'Delete',
+        onOk: async () => {
+          await Api.call('deleteType', { typeId: t.typeId });
+          toast(`${t.name} deleted`);
+          goProducts();
+        }
+      });
+    }
+  });
+
+  function openType(t) {
+    openDialog({
+      title: t ? `Edit ${t.name}` : 'Add a type',
+      ok: t ? 'Save' : 'Add type',
+      body: `
+        <label>Name<input name="name" maxlength="30" value="${esc(t ? t.name : '')}" placeholder="Biscuits"></label>
+        <label>Icon <span class="hint">One emoji</span><input name="icon" maxlength="8" value="${esc(t ? t.icon : '')}" placeholder="🍪"></label>`,
+      onOk: async f => {
+        await Api.call('saveType', { typeId: t ? t.typeId : '', name: f.get('name'), icon: f.get('icon') });
+        toast(t ? 'Type saved' : 'Type added');
+        goProducts();
+      }
+    });
+  }
+
   // ─── Dialog ──────────────────────────────────────────────────────────────
   let dialogHandler = null;
+  let dialogOkLabel = 'Save';
 
-  function openDialog({ title, body, ok, onOk }) {
+  function openDialog({ title, body, ok, onOk, onOpen, wide }) {
     $('#dialog-title').textContent = title;
     $('#dialog-body').innerHTML = body;
-    $('#dialog-ok').textContent = ok;
+    $('#dialog-ok').textContent = dialogOkLabel = ok;
     $('#dialog-error').textContent = '';
+    $('#dialog').classList.toggle('dialog--wide', !!wide);
     dialogHandler = onOk;
     $('#dialog').showModal();
+    if (onOpen) onOpen($('#dialog-body'));
   }
 
   $('#dialog-form').addEventListener('submit', async e => {
@@ -305,6 +567,7 @@
       $('#dialog-error').textContent = x.message;
     } finally {
       btn.disabled = false;
+      btn.textContent = dialogOkLabel;
     }
   });
 

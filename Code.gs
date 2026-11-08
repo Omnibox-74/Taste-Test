@@ -1,6 +1,7 @@
 /**
  * Taste Test — Apps Script backend
  * Phase 1: workbook setup, API router, login and taster management.
+ * Phase 2: types, product library, photo uploads to Drive.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -87,7 +88,15 @@ const ROUTES = {
   changePin:       { auth: true,    fn: changePin },
   adminResetPin:   { auth: 'admin', fn: adminResetPin },
   adminSetAdmin:   { auth: 'admin', fn: adminSetAdmin },
-  adminRemoveUser: { auth: 'admin', fn: adminRemoveUser }
+  adminRemoveUser: { auth: 'admin', fn: adminRemoveUser },
+
+  // Phase 2: product library (admins only, so nobody browses what's in the cupboard)
+  saveType:        { auth: 'admin', fn: saveType },
+  deleteType:      { auth: 'admin', fn: deleteType },
+  listProducts:    { auth: 'admin', fn: listProducts },
+  saveProduct:     { auth: 'admin', fn: saveProduct },
+  deleteProduct:   { auth: 'admin', fn: deleteProduct },
+  uploadPhoto:     { auth: 'admin', fn: uploadPhoto }
 };
 
 function doPost(e) {
@@ -111,7 +120,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return json_({ ok: true, data: { app: 'Taste Test', phase: 1 } });
+  return json_({ ok: true, data: { app: 'Taste Test', phase: 2 } });
 }
 
 // ─── Tasters & login ─────────────────────────────────────────────────────────
@@ -224,6 +233,132 @@ function adminRemoveUser(p, user) {
   });
 }
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+function saveType(p) {
+  const name = cleanText_(p.name, 'type name', 30, true);
+  const icon = cleanEmoji_(p.icon);
+  return withLock_(() => {
+    const types = readTable_('Types');
+    const clash = types.find(t => t.typeId !== p.typeId && String(t.name).toLowerCase() === name.toLowerCase());
+    if (clash) throw err_('There is already a type called ' + name + '.');
+
+    if (p.typeId) {
+      const t = types.find(x => x.typeId === p.typeId);
+      if (!t) throw err_('Type not found.');
+      updateRow_('Types', t._row, { name, icon });
+      return { typeId: t.typeId, name, icon };
+    }
+    const type = { typeId: newId_('T'), name, icon };
+    appendRow_('Types', type);
+    return type;
+  });
+}
+
+function deleteType(p) {
+  return withLock_(() => {
+    const used = readTable_('Products').filter(x => x.typeId === p.typeId).length;
+    if (used) throw err_('That type is used by ' + used + ' product' + (used === 1 ? '' : 's') + '. Move them to another type first.');
+    deleteWhere_('Types', t => t.typeId === p.typeId);
+    return true;
+  });
+}
+
+// ─── Products ────────────────────────────────────────────────────────────────
+function listProducts() {
+  return readTable_('Products')
+    .map(x => Object.assign({}, x, { vintage: String(x.vintage) }))
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)) || String(b.vintage).localeCompare(String(a.vintage)));
+}
+
+function saveProduct(p, user) {
+  const name = cleanText_(p.name, 'product name', 60, true);
+  const manufacturer = cleanText_(p.manufacturer, 'manufacturer', 60, true);
+  const vintage = cleanText_(p.vintage, 'vintage', 20, false);
+  const description = cleanText_(p.description, 'description', 1500, false);
+  const productLine = cleanText_(p.productLine, 'product line', 80, false) || (manufacturer + ' ' + name);
+  const photoUrl = cleanUrl_(p.photoUrl);
+  const typeId = String(p.typeId || '');
+
+  return withLock_(() => {
+    if (!readTable_('Types').some(t => t.typeId === typeId)) throw err_('Pick a type.');
+    const products = readTable_('Products');
+    const fields = { name, manufacturer, typeId, vintage, description, productLine, photoUrl };
+
+    const dupe = products.find(x => x.productId !== p.productId &&
+      String(x.name).toLowerCase() === name.toLowerCase() &&
+      String(x.manufacturer).toLowerCase() === manufacturer.toLowerCase() &&
+      String(x.vintage) === vintage);
+    if (dupe) throw err_('You already have ' + manufacturer + ' ' + name + (vintage ? ' (' + vintage + ')' : '') + '.');
+
+    if (p.productId) {
+      const existing = products.find(x => x.productId === p.productId);
+      if (!existing) throw err_('Product not found.');
+      if (existing.photoUrl && existing.photoUrl !== photoUrl) trashDrivePhoto_(existing.photoUrl);
+      updateRow_('Products', existing._row, fields);
+      return Object.assign({}, existing, fields);
+    }
+    const product = Object.assign({ productId: newId_('P') }, fields, { created: Date.now(), createdBy: user.userId });
+    appendRow_('Products', product);
+    return product;
+  });
+}
+
+function deleteProduct(p) {
+  return withLock_(() => {
+    if (readTable_('TestProducts').some(x => x.productId === p.productId)) {
+      throw err_("This product has been used in a test, so it can't be deleted. Its scores depend on it.");
+    }
+    const product = readTable_('Products').find(x => x.productId === p.productId);
+    if (!product) throw err_('Product not found.');
+    if (product.photoUrl) trashDrivePhoto_(product.photoUrl);
+    deleteWhere_('Products', x => x.productId === p.productId);
+    return true;
+  });
+}
+
+// ─── Photos (Google Drive) ───────────────────────────────────────────────────
+// Run this once from the editor after adding Phase 2, to grant Drive access.
+function setupPhotos() {
+  Logger.log('Photo folder ready: ' + photoFolder_().getUrl());
+}
+
+function uploadPhoto(p) {
+  const m = String(p.dataUrl || '').match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
+  if (!m) throw err_("That file isn't a photo the app can use. Try a JPEG or PNG.");
+  const bytes = Utilities.base64Decode(m[2]);
+  if (bytes.length > 6e6) throw err_('That photo is too large. Try a smaller one.');
+
+  const safeName = String(p.name || 'product').replace(/[^\w\- ]+/g, '').slice(0, 60) || 'product';
+  const file = photoFolder_().createFile(Utilities.newBlob(bytes, m[1], safeName + '.jpg'));
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { url: driveThumb_(file.getId()) };
+}
+
+function photoFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('PHOTO_FOLDER_ID');
+  if (id) {
+    try {
+      const f = DriveApp.getFolderById(id);
+      if (!f.isTrashed()) return f;
+    } catch (e) { /* folder gone; make a new one */ }
+  }
+  const folder = DriveApp.createFolder('Taste Test Photos');
+  props.setProperty('PHOTO_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+function driveThumb_(fileId) {
+  return 'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w1200';
+}
+
+// Only trashes files the app uploaded (links in our own thumbnail format).
+function trashDrivePhoto_(url) {
+  const m = String(url).match(/^https:\/\/drive\.google\.com\/thumbnail\?id=([\w-]+)/);
+  if (!m) return;
+  try { DriveApp.getFileById(m[1]).setTrashed(true); } catch (e) { /* already gone */ }
+}
+
 // ─── Auth helpers ────────────────────────────────────────────────────────────
 function createSession_(userId) {
   const now = Date.now();
@@ -288,6 +423,20 @@ function cleanPin_(v) {
 function cleanEmoji_(v) {
   const e = String(v || '').trim();
   return e && e.length <= 8 ? e : '🥔';
+}
+
+function cleanText_(v, label, max, required) {
+  const s = String(v == null ? '' : v).trim();
+  if (required && !s) throw err_('Add the ' + label + '.');
+  if (s.length > max) throw err_('Keep the ' + label + ' to ' + max + ' characters or fewer.');
+  return s;
+}
+
+function cleanUrl_(v) {
+  const s = String(v || '').trim();
+  if (!s) return '';
+  if (!/^https:\/\/\S+$/.test(s) || s.length > 600) throw err_('The photo link needs to start with https://');
+  return s;
 }
 
 // ─── Sheet helpers ───────────────────────────────────────────────────────────

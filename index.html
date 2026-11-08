@@ -86,8 +86,39 @@
     </div>
 
     <section class="panel" id="admin-panel" hidden>
+      <div class="panel__head">
+        <h2>Product library</h2>
+        <button class="btn" type="button" id="open-products">Open</button>
+      </div>
+      <p class="muted">Crisps, chocolates and anything else you've tasted or plan to. Only admins can see this, so nobody peeks at what's coming.</p>
       <h2>Tasters</h2>
       <ul class="user-list" id="user-list"></ul>
+    </section>
+  </section>
+
+  <section class="screen" id="screen-products" hidden>
+    <header class="topbar">
+      <button class="link" type="button" id="products-back">Home</button>
+      <span class="brand brand--small">Taste Test</span>
+    </header>
+
+    <div class="packet packet--blue packet--slim">
+      <h1 class="screen-title">Product library</h1>
+      <div class="row">
+        <button class="btn" type="button" id="add-product">Add a product</button>
+      </div>
+    </div>
+
+    <input class="search" id="product-search" type="search" placeholder="Search by name, maker or vintage" aria-label="Search products">
+    <div class="chips" id="type-filter" role="group" aria-label="Filter by type"></div>
+    <div class="products" id="product-grid"></div>
+
+    <section class="panel">
+      <div class="panel__head">
+        <h2>Types</h2>
+        <button class="btn btn--ghost" type="button" id="add-type">Add a type</button>
+      </div>
+      <ul class="type-list" id="type-list"></ul>
     </section>
   </section>
 
