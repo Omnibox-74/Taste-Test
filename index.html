@@ -31,7 +31,10 @@
       <div id="who">
         <h2>Who's tasting?</h2>
         <div class="tasters" id="taster-grid"></div>
-        <button class="link" type="button" id="go-register">I'm new here</button>
+        <div class="row row--tight">
+          <button class="link" type="button" id="go-register">I'm new here</button>
+          <a class="link" href="help.html">How does this work?</a>
+        </div>
       </div>
 
       <div id="pin-step" hidden>
@@ -73,7 +76,10 @@
   <section class="screen" id="screen-home" hidden>
     <header class="topbar">
       <span class="brand brand--small">Taste Test</span>
-      <button class="link" type="button" id="logout">Log out</button>
+      <span class="topbar__links">
+        <a class="link" href="help.html">Help</a>
+        <button class="link" type="button" id="logout">Log out</button>
+      </span>
     </header>
 
     <div class="packet packet--blue">

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>How it works · Taste Test</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥔</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<main class="help">
+
+  <header class="topbar">
+    <a class="link" href="./">Back to the app</a>
+    <span class="brand brand--small">Taste Test</span>
+  </header>
+
+  <div class="packet packet--green packet--slim">
+    <h1 class="screen-title">How it works</h1>
+    <p class="lede">Everything you need for a blind taste test, from logging in to arguing about the results.</p>
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <a href="#start">Getting started</a>
+    <a href="#test">How a taste test works</a>
+    <a href="#scoring">How to score</a>
+    <a href="#notes">“Notes of…”</a>
+    <a href="#results">Results and reviews</a>
+    <a href="#admins">For admins</a>
+    <a href="#faq">Help, something’s wrong</a>
+  </nav>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="start">
+    <h2>Getting started</h2>
+
+    <h3>Joining for the first time</h3>
+    <p>Tap <strong>I’m new here</strong> on the login screen. Type your name, pick an emoji and choose a 4-digit PIN. Pick something you’ll remember, but not your bank PIN!</p>
+    <p>The very first person to join becomes the <strong>admin</strong>, who looks after everyone else.</p>
+
+    <h3>Logging in</h3>
+    <p>Tap your name, then type your PIN on the keypad. You’ll stay logged in on that phone or computer for about three months, so you won’t need your PIN every time.</p>
+    <p>Using someone else’s phone? Tap <strong>Log out</strong> when you’re finished, so they don’t end up scoring as you.</p>
+
+    <h3>Put it on your home screen</h3>
+    <p>It works like an app if you add it to your phone’s home screen:</p>
+    <ul>
+      <li><strong>iPhone:</strong> open the site in Safari, tap the Share button, then <em>Add to Home Screen</em>.</li>
+      <li><strong>Android:</strong> open the site in Chrome, tap the ⋮ menu, then <em>Add to home screen</em>.</li>
+    </ul>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="test">
+    <h2>How a taste test works <span class="soon">Coming soon</span></h2>
+    <p>One person is the <strong>organiser</strong>. They set up the test, choose the products and run each round. Nobody else knows what’s being tasted. Even the person filling the bowls should keep the packet covered!</p>
+
+    <h3>Before the tasting</h3>
+    <ol>
+      <li>The organiser creates the test and adds the products.</li>
+      <li>Everyone else opens the app and joins the test. You can only be in one test at a time.</li>
+      <li>You wait in the <strong>lobby</strong>. The organiser can see who’s arrived, and starts the test when everyone’s ready.</li>
+    </ol>
+
+    <h3>Each round</h3>
+    <div class="steps">
+      <div class="step">
+        <span class="step__num">1</span>
+        <div>
+          <h4>Taste it blind</h4>
+          <p>You’re told only the sample number, like <em>Sample 3</em>. Taste it, then give it a <strong>niceness</strong> score. You can also add some “notes of…”, guess the flavour and leave a comment.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step__num">2</span>
+        <div>
+          <h4>The reveal</h4>
+          <p>Once everyone has scored, the organiser reveals what it was. Your screen changes to show the product’s name, photo and what the packet says it should taste like.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step__num">3</span>
+        <div>
+          <h4>Score how true it is</h4>
+          <p>Now you know what it’s meant to be, give it an <strong>authenticity</strong> score. Taste it again if you’ve got some left!</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step__num">4</span>
+        <div>
+          <h4>Next sample</h4>
+          <p>When everyone’s done, the organiser moves on. Once every sample has been tasted, the results appear for everyone.</p>
+        </div>
+      </div>
+    </div>
+    <p>The organiser can see who still hasn’t scored. Yes, everyone will know it was you holding things up.</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="scoring">
+    <h2>How to score</h2>
+    <p>Every sample gets two separate scores out of 5. They measure completely different things, so try not to let one sway the other.</p>
+
+    <div class="score-card">
+      <h3>😋 Niceness</h3>
+      <p class="score-card__q">How much do you like it? That’s all. It doesn’t matter what it’s meant to taste like.</p>
+      <table class="scale">
+        <tr><th scope="row">1</th><td>Never again</td></tr>
+        <tr><th scope="row">2</th><td>Not for me</td></tr>
+        <tr><th scope="row">3</th><td>It’s fine</td></tr>
+        <tr><th scope="row">4</th><td>Really good</td></tr>
+        <tr><th scope="row">5</th><td>I want the whole bag</td></tr>
+      </table>
+    </div>
+
+    <div class="score-card">
+      <h3>🎯 Authenticity</h3>
+      <p class="score-card__q">Does it taste like what the packet says? It doesn’t matter whether you like it.</p>
+      <table class="scale">
+        <tr><th scope="row">1</th><td>Nothing like it</td></tr>
+        <tr><th scope="row">2</th><td>A faint hint</td></tr>
+        <tr><th scope="row">3</th><td>Getting there</td></tr>
+        <tr><th scope="row">4</th><td>Very close</td></tr>
+        <tr><th scope="row">5</th><td>Exactly as promised</td></tr>
+      </table>
+    </div>
+
+    <p class="example"><strong>Example:</strong> a crisp says “Roast Chicken” but tastes exactly like cheese and onion. If you love cheese and onion, that’s <strong>niceness 5</strong> but <strong>authenticity 1</strong>. Both are right!</p>
+    <p>The organiser can switch on <strong>half points</strong> for a test, so you can give a 3½ when a 3 feels mean and a 4 feels generous.</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="notes">
+    <h2>“Notes of…” <span class="soon">Coming soon</span></h2>
+    <p>Like wine experts, you can describe what you taste. There are no wrong answers, and the sillier the better.</p>
+    <p class="note-chips">
+      <span>smoky bacon</span><span>summer rain</span><span>a hint of regret</span><span>vanilla</span>
+      <span>Grandma’s handbag</span><span>cardboard</span><span>a damp tent</span><span>Christmas</span>
+    </p>
+    <ul>
+      <li>Start typing and you’ll see notes other people have used before. Picking one of those means it counts together with theirs in the results.</li>
+      <li>Stuck for ideas? The <strong>Inspire me</strong> button suggests one.</li>
+      <li>Your notes are tagged as before or after the reveal, so we can tell real palates from people who read the packet.</li>
+    </ul>
+    <p>You can also <strong>guess the flavour</strong> before the reveal. Get it right and you’re in the running for the <em>Best Palate</em> award.</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="results">
+    <h2>Results and reviews <span class="soon">Coming soon</span></h2>
+
+    <h3>At the end of a test</h3>
+    <p>Everyone sees the results together: products ranked by niceness, authenticity and overall, a word cloud of everyone’s notes, and awards like <em>Harshest Critic</em>, <em>Most Generous</em>, <em>Speed Demon</em> and <em>Best Palate</em>. You also get your own <strong>taster profile</strong>, a chart showing how generous, quick and agreeable you are compared with everyone else.</p>
+
+    <h3>Looking things up later</h3>
+    <p>Standing in a shop wondering whether those crisps were any good? Tap <strong>Reviews</strong> and search. You’ll see how the group scored anything that’s been through a finished test, including everyone’s comments and notes. If we’ve tasted it in different years, you can compare the vintages.</p>
+    <p>Products only appear in Reviews once they’ve been tasted, so nobody can peek at what’s coming next time.</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="admins">
+    <h2>For admins</h2>
+    <p>Admins see extra options on the home screen. You can make other people admins too.</p>
+
+    <h3>Tasters</h3>
+    <ul>
+      <li><strong>Reset PIN</strong> for anyone who’s forgotten theirs.</li>
+      <li><strong>Make admin</strong> or <strong>Remove admin</strong>. There must always be at least one admin.</li>
+      <li><strong>Remove</strong> a taster. They can’t log in any more, but their scores from past tests stay in the results.</li>
+    </ul>
+
+    <h3>Product library</h3>
+    <p>This is where every product lives, both ones you’ve tasted and ones waiting for the next test. Only admins can see it, to keep the surprise.</p>
+    <ul>
+      <li><strong>Photo:</strong> tap <em>Take or choose a photo</em> to snap the packet with your phone. Photos are shrunk automatically and saved to a <em>Taste Test Photos</em> folder in the admin’s Google Drive.</li>
+      <li><strong>Vintage:</strong> usually the year you bought it. Recipes change, so the same crisps can taste different from one year to the next.</li>
+      <li><strong>Product line:</strong> links the same product across vintages, so “Walkers Prawn Cocktail” from 2024 and 2026 can be compared. When you add a new vintage, pick the existing line from the suggestions.</li>
+      <li><strong>Manufacturer’s description:</strong> copy what the packet says it tastes like. Tasters see this at the reveal and use it for their authenticity score.</li>
+      <li>A product that has been used in a test can’t be deleted, because its scores depend on it.</li>
+    </ul>
+
+    <h3>Types</h3>
+    <p>Types group products together, like Crisps, Chocolate or Wine. Each has a name and an emoji. A type can only be deleted once no products use it.</p>
+  </section>
+
+  <!-- ─────────────────────────────────────────── -->
+  <section class="panel help-section" id="faq">
+    <h2>Help, something’s wrong</h2>
+
+    <details>
+      <summary>I’ve forgotten my PIN</summary>
+      <p>Ask an admin to reset it. After five wrong tries you’re locked out for 10 minutes, so ask before you keep guessing.</p>
+    </details>
+    <details>
+      <summary>It says “Your login has expired”</summary>
+      <p>Just log in again with your PIN. Logins last about three months on each device.</p>
+    </details>
+    <details>
+      <summary>It says “Can’t reach the spreadsheet”</summary>
+      <p>Check your Wi-Fi or mobile signal and try again. If it keeps happening for everyone, let the admin know.</p>
+    </details>
+    <details>
+      <summary>My name isn’t on the list</summary>
+      <p>You may have been removed by mistake, or you joined with a slightly different name. Ask an admin.</p>
+    </details>
+    <details>
+      <summary>Someone already has my name</summary>
+      <p>Add an initial or a nickname, like “Sam B” or “Big Sam”.</p>
+    </details>
+    <details>
+      <summary>A photo won’t upload</summary>
+      <p>Try again on a better connection, or choose the photo from your gallery instead of taking it in the app.</p>
+    </details>
+  </section>
+
+  <p class="help-foot"><a class="link" href="./">Back to the app</a></p>
+</main>
+</body>
+</html>
