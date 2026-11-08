@@ -378,8 +378,11 @@
         <div class="photo">
           <div class="photo__preview" id="photo-preview"></div>
           <div class="photo__actions">
-            <label class="btn btn--ghost photo__pick">Take or choose a photo
-              <input type="file" id="photo-file" accept="image/*" hidden>
+            <label class="btn btn--ghost photo__pick">📷 Take a photo
+              <input type="file" class="photo-file" accept="image/*" capture="environment" hidden>
+            </label>
+            <label class="btn btn--ghost photo__pick">🖼️ Choose from gallery
+              <input type="file" class="photo-file" accept="image/*" hidden>
             </label>
             <button type="button" class="link" id="photo-remove">Remove photo</button>
           </div>
@@ -406,7 +409,7 @@
 
       onOpen: body => {
         const hidden = body.querySelector('[name=photoUrl]');
-        const fileInput = body.querySelector('#photo-file');
+        const fileInputs = body.querySelectorAll('.photo-file');
         const paint = src => {
           body.querySelector('#photo-preview').innerHTML = src
             ? `<img src="${esc(src)}" alt="Product photo" referrerpolicy="no-referrer">`
@@ -415,21 +418,22 @@
         };
         paint(v.photoUrl);
 
-        fileInput.addEventListener('change', async () => {
-          const file = fileInput.files[0];
+        fileInputs.forEach(input => input.addEventListener('change', async () => {
+          const file = input.files[0];
           if (!file) return;
           try {
             pendingPhoto = await shrinkImage(file);
             paint(pendingPhoto);
           } catch (x) {
             $('#dialog-error').textContent = "Couldn't read that photo. Try a different one.";
+          } finally {
+            input.value = '';   // lets you pick the same file again
           }
-        });
+        }));
 
         body.querySelector('#photo-remove').addEventListener('click', () => {
           pendingPhoto = null;
           hidden.value = '';
-          fileInput.value = '';
           paint('');
         });
 
