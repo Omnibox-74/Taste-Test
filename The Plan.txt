@@ -8,7 +8,7 @@ We go round and round tasting the selection and scoring after each round.  Once 
 
 There can be any number of tasters taking part in the test.
 
-Id like to use Google sheets with a deployed appscript to store data.
+Id like to use Google sheets with a deployed appscript to store data.  call the workbook "Taste Test"?.
 
 Id then like the app to be full stack html which i'll host on my GitHub account.  id like to be able to look at past test as well as maybe see combined results of previous tests - maybe even select a sample of past tests.  i.e be able to compare tests of the same products over a number of years.
 
