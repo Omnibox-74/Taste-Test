@@ -422,8 +422,8 @@
           const file = input.files[0];
           if (!file) return;
           try {
-            pendingPhoto = await shrinkImage(file);
-            paint(pendingPhoto);
+            const photo = await cropImage(file);
+            if (photo) { pendingPhoto = photo; paint(photo); }
           } catch (x) {
             $('#dialog-error').textContent = "Couldn't read that photo. Try a different one.";
           } finally {
@@ -483,6 +483,77 @@
       }
     });
   }
+
+  // ─── Cropping ────────────────────────────────────────────────────────────
+  // Opens the crop window over the product form. Resolves with a JPEG data URL,
+  // or null if cancelled. Falls back to a plain resize if Cropper didn't load.
+  let cropper = null;
+  let cropResolve = null;
+  let cropRatio = 1;
+
+  function cropImage(file) {
+    if (typeof window.Cropper === 'undefined') return shrinkImage(file);
+    return new Promise(resolve => {
+      cropResolve = resolve;
+      const img = $('#crop-img');
+      const url = URL.createObjectURL(file);
+      img.dataset.url = url;
+      $('#crop-dialog').showModal();          // show first so Cropper can measure the space
+      img.onload = () => {
+        if (cropper) cropper.destroy();
+        cropper = new Cropper(img, {
+          aspectRatio: cropRatio,
+          viewMode: 1,
+          dragMode: 'move',
+          autoCropArea: 0.9,
+          background: false,
+          restore: false,
+          toggleDragModeOnDblclick: false
+        });
+      };
+      img.onerror = () => finishCrop(null, "Couldn't read that photo. Try a different one.");
+      img.src = url;
+    });
+  }
+
+  function finishCrop(result, error) {
+    const d = $('#crop-dialog');
+    if (d.open) d.close();
+    if (cropper) { cropper.destroy(); cropper = null; }
+    const img = $('#crop-img');
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.removeAttribute('src');
+    if (error) $('#dialog-error').textContent = error;
+    const done = cropResolve;
+    cropResolve = null;
+    if (done) done(result);
+  }
+
+  $('#crop-ok').addEventListener('click', () => {
+    if (!cropper) return;
+    const canvas = cropper.getCroppedCanvas({
+      maxWidth: 1200,
+      maxHeight: 1200,
+      fillColor: '#FFFFFF',
+      imageSmoothingQuality: 'high'
+    });
+    finishCrop(canvas ? canvas.toDataURL('image/jpeg', 0.82) : null);
+  });
+
+  $('#crop-cancel').addEventListener('click', () => finishCrop(null));
+  $('#crop-dialog').addEventListener('cancel', e => { e.preventDefault(); finishCrop(null); });
+
+  $('#crop-ratios').addEventListener('click', e => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    cropRatio = Number(b.dataset.r);
+    $('#crop-ratios').querySelectorAll('.chip').forEach(c => {
+      const on = c === b;
+      c.classList.toggle('chip--on', on);
+      c.setAttribute('aria-pressed', on);
+    });
+    if (cropper) cropper.setAspectRatio(cropRatio);
+  });
 
   // Resize photos in the browser so uploads stay small and quick
   async function shrinkImage(file, max = 1200, quality = 0.82) {

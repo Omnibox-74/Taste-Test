@@ -456,3 +456,20 @@ summary { font-weight: 700; cursor: pointer; }
 details p { margin: .5rem 0 0; color: var(--muted); }
 
 .help-foot { text-align: center; margin-top: 1rem; }
+
+/* ─── Photo cropping ─── */
+.ratios { margin: 0 0 .75rem; }
+.crop-stage {
+  height: min(58vh, 26rem);
+  background: #0E1018;
+  border-radius: 12px;
+  overflow: hidden;
+}
+.crop-stage img { display: block; max-width: 100%; }
+.crop-hint { margin: .6rem 0 0; }
+.cropper-view-box { outline-color: var(--star); }
+.cropper-line, .cropper-point { background-color: var(--star); }
+
+/* Show the whole cropped photo, whatever shape was chosen */
+.product__pic { aspect-ratio: 4 / 3; }
+.product__pic img, .photo__preview img { object-fit: contain; }
