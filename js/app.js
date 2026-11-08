@@ -420,19 +420,20 @@
   }
 
   // ─── Lobby ───────────────────────────────────────────────────────────────
-  const lobby = { testId: null, version: null, wasIn: false, test: null };
+  const lobby = { testId: null, version: null, wasIn: false, test: null, showBowls: false };
 
   async function openLobby(testId) {
     show('screen-lobby');
     lobby.testId = testId;
     lobby.version = null;
     lobby.wasIn = false;
+    lobby.showBowls = false;
     $('#lobby-name').textContent = 'Loading…';
     $('#lobby-status').textContent = '';
     $('#lobby-meta').textContent = '';
     $('#lobby-actions').innerHTML = '';
     $('#lobby-tasters').innerHTML = '';
-    $('#lobby-products-panel').hidden = true;
+    $('#lobby-setup').hidden = true;
     refreshLobby();
   }
 
@@ -475,14 +476,18 @@
     const live = s.status === 'live';
     $('#lobby-status').textContent = live ? 'Tasting in progress' : 'In the lobby';
     $('#lobby-name').textContent = s.name;
+    const who = u => (u ? u.emoji + ' ' + u.displayName : 'nobody yet');
     $('#lobby-meta').textContent =
-      `${fmtDate(s.testDate)}. Run by ${s.organiser ? s.organiser.emoji + ' ' + s.organiser.displayName : 'someone'}. ` +
+      `${fmtDate(s.testDate)}. Run by ${who(s.organiser)}, bowl keeper ${who(s.keeper)}. ` +
       `${plural(s.sampleCount, 'sample')} to taste${s.halfPoints ? ', half points allowed' : ''}.`;
 
     // Actions depend on who you are and where the test is up to
     let html = '';
     if (s.isOrganiser && !live) {
-      const why = !s.sampleCount ? 'Add some products first' : !s.participants.length ? 'Waiting for tasters to join' : '';
+      const why = !s.sampleCount ? 'Add some products first'
+        : !s.bowlsReady ? 'Prepare the bowls first'
+        : !s.keeper ? 'Choose a bowl keeper first'
+        : !s.participants.length ? 'Waiting for tasters to join' : '';
       html += `<button class="btn" type="button" data-act="start"${why ? ' disabled' : ''}>Start the test</button>`;
       html += s.amIn
         ? '<button class="link" type="button" data-act="leave">Stop tasting myself</button>'
@@ -498,7 +503,10 @@
       html += `<p class="lobby-hint">You're in. Waiting for ${s.organiser ? esc(s.organiser.displayName) : 'the organiser'} to start…</p>`;
       html += '<button class="btn btn--ghost" type="button" data-act="leave">Leave test</button>';
     } else {
-      html += '<button class="btn" type="button" data-act="join">Join this test</button>';
+      html += `<button class="btn" type="button" data-act="join">${s.isKeeper ? 'Taste as well' : 'Join this test'}</button>`;
+    }
+    if (s.isKeeper && !s.isOrganiser && !live) {
+      html = `<p class="lobby-hint">🥣 You're the bowl keeper. When the tasting starts, you'll pick which bowl goes out each round. You won't know what's in them!</p>` + html;
     }
     $('#lobby-actions').innerHTML = html;
 
@@ -512,15 +520,7 @@
           : ''}
       </div>`).join('') : '<p class="empty">Nobody yet.</p>';
 
-    const showProducts = s.isOrganiser && !live;
-    $('#lobby-products-panel').hidden = !showProducts;
-    if (showProducts) {
-      $('#lobby-products').innerHTML = s.products.length ? s.products.map(p => `
-        <li>
-          <span class="pick__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🍽️'}</span>
-          <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
-        </li>`).join('') : '<li class="empty">No products yet. Tap Change to add some.</li>';
-    }
+    renderSetup(s, live);
     return true;
   }
 
@@ -568,7 +568,75 @@
     }
   });
 
-  $('#lobby-edit-products').addEventListener('click', async () => {
+  // The organiser's "Getting ready" checklist
+  function renderSetup(s, live) {
+    const panel = $('#lobby-setup');
+    panel.hidden = !(s.isOrganiser && !live);
+    if (panel.hidden) return;
+
+    const step = (done, num, title, detail, buttons) => `
+      <span class="setup__tick${done ? ' setup__tick--done' : ''}" aria-hidden="true">${done ? '✓' : num}</span>
+      <div class="setup__body"><strong>${title}</strong><span>${detail}</span></div>
+      <div class="setup__btns">${buttons}</div>`;
+
+    $('#setup-products').innerHTML = step(s.sampleCount > 0, 1, 'Products',
+      s.sampleCount ? plural(s.sampleCount, 'product') + ' chosen' : 'None chosen yet',
+      '<button class="link" type="button" data-setup="products">Change</button>');
+
+    $('#setup-bowls').innerHTML = step(s.bowlsReady, 2, 'Bowls',
+      s.bowlsReady ? 'Fill each bowl and stick its letter underneath'
+        : 'Give each product a secret bowl letter',
+      s.bowlsReady
+        ? `<button class="link" type="button" data-setup="toggle">${lobby.showBowls ? 'Hide list' : 'Show list'}</button>
+           <button class="link" type="button" data-setup="bowls">Shuffle again</button>`
+        : `<button class="btn btn--small" type="button" data-setup="bowls"${s.sampleCount ? '' : ' disabled'}>Prepare bowls</button>`);
+
+    $('#setup-keeper').innerHTML = step(!!s.keeper, 3, 'Bowl keeper',
+      s.keeper ? `${esc(s.keeper.emoji)} ${esc(s.keeper.displayName)} picks which bowl goes out each round`
+        : "Picks the bowls during tasting, without knowing what's in them",
+      `<button class="link" type="button" data-setup="keeper">${s.keeper ? 'Change' : 'Choose'}</button>`);
+
+    const list = $('#bowl-list');
+    list.hidden = !(s.bowlsReady && lobby.showBowls);
+    if (!list.hidden) {
+      list.innerHTML = `<ul class="lobby-products">${s.products.map(p => `
+        <li>
+          <span class="bowl-badge">${esc(p.bowl)}</span>
+          <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
+        </li>`).join('')}</ul>
+        <p class="muted">Keep this to yourself. Once the test starts, this list is gone for good.</p>`;
+    }
+  }
+
+  $('#lobby-setup').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-setup]');
+    if (!b) return;
+    const s = lobby.test;
+    const act = b.dataset.setup;
+
+    if (act === 'toggle') {
+      lobby.showBowls = !lobby.showBowls;
+      return renderSetup(s, false);
+    }
+    if (act === 'products') return editLobbyProducts();
+    if (act === 'keeper') return chooseKeeper();
+    if (act === 'bowls') {
+      if (s.bowlsReady && !confirm('Shuffle the bowl letters again? If you have already labelled the bowls, you will need to redo them.')) return;
+      b.disabled = true;
+      try {
+        await Api.call('prepareBowls', { testId: s.testId });
+        lobby.showBowls = true;
+        toast('Bowls ready. Time to fill and label them');
+        refreshLobby(true);
+      } catch (x) {
+        toast(x.message);
+        b.disabled = false;
+      }
+    }
+  });
+
+  async function editLobbyProducts() {
+    if (lobby.test.bowlsReady && !confirm('Changing the products clears the bowl letters, so you will need to prepare and label the bowls again. Carry on?')) return;
     try {
       [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
     } catch (e) {
@@ -582,11 +650,46 @@
       onOpen: wirePicker,
       onOk: async f => {
         await Api.call('updateTestProducts', { testId: lobby.testId, productIds: f.getAll('productIds') });
+        lobby.showBowls = false;
         toast('Products updated');
         refreshLobby(true);
       }
     });
-  });
+  }
+
+  async function chooseKeeper() {
+    let users;
+    try {
+      users = await Api.call('listUsers');
+    } catch (e) {
+      return toast(e.message);
+    }
+    const s = lobby.test;
+    const tasting = new Set(s.participants.map(u => u.userId));
+    users.sort((a, b) => (tasting.has(b.userId) - tasting.has(a.userId)) || a.displayName.localeCompare(b.displayName));
+    const current = s.keeper ? s.keeper.userId : '';
+
+    openDialog({
+      title: 'Who is the bowl keeper?',
+      ok: 'Choose',
+      body: `
+        <p class="muted">They pick which bowl goes out each round, without knowing what's in them. They can taste too, but it shouldn't be you if you're tasting, because you know the bowls.</p>
+        <ul class="pick-list">${users.map(u => `
+          <li><label>
+            <input type="radio" name="keeper" value="${esc(u.userId)}"${u.userId === current ? ' checked' : ''}>
+            <span class="pick__pic">${esc(u.emoji)}</span>
+            <span class="pick__text"><strong>${esc(u.displayName)}</strong><span>${u.userId === state.user.userId ? 'You, the organiser' : tasting.has(u.userId) ? 'Tasting in this test' : 'Not tasting'}</span></span>
+          </label></li>`).join('')}
+        </ul>`,
+      onOk: async f => {
+        const id = f.get('keeper');
+        if (!id) throw new Error('Pick someone.');
+        await Api.call('setKeeper', { testId: s.testId, userId: id });
+        toast('Bowl keeper chosen');
+        refreshLobby(true);
+      }
+    });
+  }
 
   // ─── Product library ─────────────────────────────────────────────────────
   Object.assign(state, { types: [], products: [], filter: 'all', search: '' });

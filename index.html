@@ -125,13 +125,15 @@
       <div class="lobby-tasters" id="lobby-tasters"></div>
     </section>
 
-    <section class="panel" id="lobby-products-panel" hidden>
-      <div class="panel__head">
-        <h2>Products</h2>
-        <button class="btn btn--ghost" type="button" id="lobby-edit-products">Change</button>
-      </div>
-      <p class="muted">Only you can see these. They get shuffled into random sample numbers when you start, so even you won't know which is which.</p>
-      <ul class="lobby-products" id="lobby-products"></ul>
+    <section class="panel" id="lobby-setup" hidden>
+      <h2>Getting ready</h2>
+      <p class="muted">Only you can see this.</p>
+      <ol class="setup">
+        <li class="setup__step" id="setup-products"></li>
+        <li class="setup__step" id="setup-bowls"></li>
+        <li class="setup__step" id="setup-keeper"></li>
+      </ol>
+      <div class="bowl-list" id="bowl-list" hidden></div>
     </section>
   </section>
 

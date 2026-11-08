@@ -2,7 +2,7 @@
  * Taste Test — Apps Script backend
  * Phase 1: workbook setup, API router, login and taster management.
  * Phase 2: types, product library, photo uploads to Drive.
- * Phase 3: creating tests, choosing products, the lobby.
+ * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -16,8 +16,8 @@ const SCHEMA = {
   Sessions:         ['token', 'userId', 'created', 'expires'],
   Types:            ['typeId', 'name', 'icon'],
   Products:         ['productId', 'productLine', 'name', 'manufacturer', 'typeId', 'vintage', 'description', 'photoUrl', 'created', 'createdBy'],
-  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt'],
-  TestProducts:     ['testId', 'sampleNo', 'productId', 'order'],
+  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt', 'keeperId', 'bowlsReady'],
+  TestProducts:     ['testId', 'sampleNo', 'productId', 'order', 'bowl'],
   TestParticipants: ['testId', 'userId', 'joinedAt', 'status'],
   Scores:           ['testId', 'sampleNo', 'userId', 'niceness', 'authenticity', 'flavourGuess', 'guessCorrect', 'comment', 'phaseOpenedAt', 'nicenessAt', 'authenticityAt'],
   Notes:            ['testId', 'sampleNo', 'userId', 'note', 'phase', 'created'],
@@ -107,6 +107,8 @@ const ROUTES = {
   createTest:         { auth: 'admin', fn: createTest },
   updateTestProducts: { auth: 'admin', fn: updateTestProducts },
   removeParticipant:  { auth: 'admin', fn: removeParticipant },
+  setKeeper:          { auth: 'admin', fn: setKeeper },
+  prepareBowls:       { auth: 'admin', fn: prepareBowls },
   startTest:          { auth: 'admin', fn: startTest },
   cancelTest:         { auth: 'admin', fn: cancelTest }
 };
@@ -317,9 +319,13 @@ function saveProduct(p, user) {
 
 function deleteProduct(p) {
   return withLock_(() => {
-    if (readTable_('TestProducts').some(x => x.productId === p.productId)) {
+    // Products from cancelled tests can go (handy for practice runs); anything else has scores.
+    const cancelled = readTable_('Tests').filter(t => t.status === 'cancelled').map(t => t.testId);
+    const uses = readTable_('TestProducts').filter(x => x.productId === p.productId);
+    if (uses.some(x => cancelled.indexOf(x.testId) === -1)) {
       throw err_("This product has been used in a test, so it can't be deleted. Its scores depend on it.");
     }
+    deleteWhere_('TestProducts', x => x.productId === p.productId);
     const product = readTable_('Products').find(x => x.productId === p.productId);
     if (!product) throw err_('Product not found.');
     if (product.photoUrl) trashDrivePhoto_(product.photoUrl);
@@ -391,7 +397,8 @@ function createTest(p, user) {
     const test = {
       testId: newId_('X'), name, testDate, organiserId: user.userId, status: 'lobby',
       halfPoints: !!p.halfPoints, currentSample: '', phase: '', phaseOpenedAt: '',
-      version: now, created: now, source: 'live', startedAt: '', finishedAt: ''
+      version: now, created: now, source: 'live', startedAt: '', finishedAt: '',
+      keeperId: '', bowlsReady: false
     };
     appendRow_('Tests', test);
     appendRows_('TestProducts', productIds.map(id => ({ testId: test.testId, sampleNo: '', productId: id, order: '' })));
@@ -406,7 +413,8 @@ function updateTestProducts(p, user) {
     const t = organisersTest_(p.testId, user, 'lobby');
     const productIds = checkProductIds_(p.productIds);
     deleteWhere_('TestProducts', x => x.testId === t.testId);
-    appendRows_('TestProducts', productIds.map(id => ({ testId: t.testId, sampleNo: '', productId: id, order: '' })));
+    appendRows_('TestProducts', productIds.map(id => ({ testId: t.testId, sampleNo: '', productId: id, order: '', bowl: '' })));
+    updateRow_('Tests', t._row, { bowlsReady: false });   // bowls need re-labelling
     bumpTest_(t);
     return true;
   });
@@ -421,7 +429,7 @@ function listOpenTests(p, user) {
   const samples = readTable_('TestProducts');
   const ids = tests.map(t => t.testId);
   const mine = parts.find(x => x.userId === user.userId && ids.indexOf(x.testId) > -1);
-  const organising = tests.find(t => t.organiserId === user.userId);
+  const organising = tests.find(t => t.organiserId === user.userId || t.keeperId === user.userId);
 
   return {
     myTestId: mine ? mine.testId : (organising ? organising.testId : null),
@@ -431,6 +439,7 @@ function listOpenTests(p, user) {
         testId: t.testId, name: String(t.name), testDate: t.testDate, status: t.status,
         organiser: users[t.organiserId],
         isOrganiser: t.organiserId === user.userId,
+        isKeeper: t.keeperId === user.userId,
         tasterCount: parts.filter(x => x.testId === t.testId).length,
         sampleCount: samples.filter(x => x.testId === t.testId).length
       }))
@@ -464,16 +473,25 @@ function getTest(p, user) {
     amIn: parts.some(x => x.userId === user.userId),
     participants: parts.map(x => users[x.userId]).filter(Boolean),
     sampleCount: samples.length,
-    currentSample: t.currentSample, phase: t.phase
+    currentSample: t.currentSample, phase: t.phase,
+    keeper: t.keeperId ? users[t.keeperId] || null : null,
+    isKeeper: t.keeperId === user.userId,
+    bowlsReady: isTrue_(t.bowlsReady)
   };
 
-  // Only the organiser sees product names, and only before the test starts.
+  // Only the organiser sees product names and bowl letters, and only before
+  // the test starts. After that the app is the only thing that knows.
   if (isOrganiser && t.status === 'lobby') {
     const products = productMap_();
-    out.products = samples.map(x => products[x.productId]).filter(Boolean).map(pr => ({
-      productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
-      vintage: String(pr.vintage), photoUrl: pr.photoUrl, typeId: pr.typeId
-    }));
+    out.products = samples
+      .map(x => ({ x, pr: products[x.productId] }))
+      .filter(o => o.pr)
+      .map(({ x, pr }) => ({
+        productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
+        vintage: String(pr.vintage), photoUrl: pr.photoUrl, typeId: pr.typeId,
+        bowl: out.bowlsReady ? String(x.bowl) : ''
+      }))
+      .sort((a, b) => (a.bowl.length - b.bowl.length) || a.bowl.localeCompare(b.bowl));
   }
   return out;
 }
@@ -525,22 +543,59 @@ function startTest(p, user) {
     const tasters = readTable_('TestParticipants').filter(x => x.testId === t.testId && x.status === 'in');
     if (!samples.length) throw err_('Add at least one product first.');
     if (!tasters.length) throw err_('Nobody has joined yet.');
+    if (!isTrue_(t.bowlsReady)) throw err_('Prepare the bowls first.');
+    if (!t.keeperId) throw err_('Choose a bowl keeper first.');
 
-    // Shuffle so nobody, organiser included, knows which sample is which.
-    const order = samples.map((_, i) => i + 1);
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
-    }
-    samples.forEach((row, i) => updateRow_('TestProducts', row._row, { sampleNo: order[i], order: order[i] }));
-
+    // Sample numbers are given out round by round, as the keeper picks each bowl.
     const now = Date.now();
     updateRow_('Tests', t._row, {
-      status: 'live', currentSample: 1, phase: 'niceness', phaseOpenedAt: now, startedAt: now, version: now
+      status: 'live', currentSample: 1, phase: 'choose', phaseOpenedAt: now, startedAt: now, version: now
     });
     setVersionCache_(t.testId, now);
     return true;
   });
+}
+
+function setKeeper(p, user) {
+  return withLock_(() => {
+    const t = organisersTest_(p.testId, user, 'lobby');
+    const keeper = findUser_(p.userId);
+    if (!keeper || !isTrue_(keeper.active)) throw err_('Taster not found.');
+    updateRow_('Tests', t._row, { keeperId: keeper.userId });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+// Gives each product a bowl letter in random order. Re-running reshuffles.
+function prepareBowls(p, user) {
+  return withLock_(() => {
+    const t = organisersTest_(p.testId, user, 'lobby');
+    const samples = readTable_('TestProducts').filter(x => x.testId === t.testId);
+    if (!samples.length) throw err_('Add some products first.');
+
+    const letters = samples.map((_, i) => bowlLetter_(i));
+    for (let i = letters.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = letters[i]; letters[i] = letters[j]; letters[j] = tmp;
+    }
+    samples.forEach((row, i) => updateRow_('TestProducts', row._row, { bowl: letters[i] }));
+    updateRow_('Tests', t._row, { bowlsReady: true });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+// A, B … Z, then AA, AB …
+function bowlLetter_(i) {
+  let s = '';
+  i += 1;
+  while (i > 0) {
+    const r = (i - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    i = Math.floor((i - 1) / 26);
+  }
+  return s;
 }
 
 function cancelTest(p, user) {

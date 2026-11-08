@@ -598,3 +598,44 @@ label.check input { width: 1.3rem; height: 1.3rem; margin: 0; accent-color: var(
 .pick__text span { font-size: .9rem; color: var(--muted); }
 
 @media (prefers-reduced-motion: reduce) { .lobby-taster { animation: none; } }
+
+/* ─── Lobby setup checklist and bowls ─── */
+.btn--small { padding: .55rem .95rem; font-size: .95rem; }
+.pick-list input[type=radio] { width: 1.3rem; height: 1.3rem; margin: 0; flex: none; accent-color: var(--blue); }
+
+.setup { list-style: none; margin: .5rem 0 1rem; padding: 0; }
+.setup__step {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  gap: .2rem .75rem;
+  align-items: start;
+  padding: .85rem 0;
+  border-top: 1px solid var(--line);
+}
+.setup__tick {
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  color: var(--muted);
+  font: 800 1rem/1 var(--display);
+}
+.setup__tick--done { background: var(--green); border-color: var(--green); color: #FFFFFF; }
+.setup__body { display: flex; flex-direction: column; line-height: 1.35; }
+.setup__body span { color: var(--muted); font-size: .95rem; }
+.setup__btns { grid-column: 2; display: flex; flex-wrap: wrap; align-items: center; gap: .3rem 1.1rem; margin-top: .3rem; }
+
+.bowl-list { margin-top: -.5rem; }
+.bowl-badge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.8rem;
+  height: 2.8rem;
+  border-radius: 50%;
+  background: var(--star);
+  color: #1B1F33;
+  font: 800 1.35rem/1 var(--display);
+}
