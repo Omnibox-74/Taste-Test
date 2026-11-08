@@ -86,8 +86,9 @@
     <div class="packet packet--blue">
       <p class="hello"><span id="home-emoji"></span> <span id="home-name"></span></p>
       <h2>Tests to join</h2>
-      <p class="empty">Nothing's on the table yet. When an organiser opens a test, it'll show up here.</p>
+      <div class="test-list" id="open-tests"><p class="loading">Looking for tests…</p></div>
       <div class="row">
+        <button class="btn" type="button" id="create-test" hidden>Create a test</button>
         <button class="btn btn--ghost" type="button" id="change-pin">Change my PIN</button>
       </div>
     </div>
@@ -100,6 +101,37 @@
       <p class="muted">Crisps, chocolates and anything else you've tasted or plan to. Only admins can see this, so nobody peeks at what's coming.</p>
       <h2>Tasters</h2>
       <ul class="user-list" id="user-list"></ul>
+    </section>
+  </section>
+
+  <section class="screen" id="screen-lobby" hidden>
+    <header class="topbar">
+      <button class="link" type="button" id="lobby-home">Home</button>
+      <span class="brand brand--small">Taste Test</span>
+    </header>
+
+    <div class="packet packet--red packet--slim">
+      <p class="eyebrow" id="lobby-status"></p>
+      <h1 class="screen-title" id="lobby-name">Loading…</h1>
+      <p class="lobby-meta" id="lobby-meta"></p>
+      <div class="lobby-actions" id="lobby-actions"></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel__head">
+        <h2>Who's here</h2>
+        <span class="muted" id="lobby-count"></span>
+      </div>
+      <div class="lobby-tasters" id="lobby-tasters"></div>
+    </section>
+
+    <section class="panel" id="lobby-products-panel" hidden>
+      <div class="panel__head">
+        <h2>Products</h2>
+        <button class="btn btn--ghost" type="button" id="lobby-edit-products">Change</button>
+      </div>
+      <p class="muted">Only you can see these. They get shuffled into random sample numbers when you start, so even you won't know which is which.</p>
+      <ul class="lobby-products" id="lobby-products"></ul>
     </section>
   </section>
 

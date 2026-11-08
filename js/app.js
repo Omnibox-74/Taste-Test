@@ -8,7 +8,11 @@
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+  const timers = { lobby: null, home: null };
+
   function show(id) {
+    clearTimeout(timers.lobby);
+    clearTimeout(timers.home);
     document.querySelectorAll('.screen').forEach(s => { s.hidden = s.id !== id; });
     window.scrollTo(0, 0);
   }
@@ -30,7 +34,7 @@
     if (Api.getToken()) {
       try {
         state.user = await Api.call('me');
-        return goHome();
+        return goHome(true);
       } catch (e) {
         Api.setToken(null);
       }
@@ -124,7 +128,7 @@
       const r = await Api.call('login', { userId: state.picked.userId, pin: state.pin });
       Api.setToken(r.token);
       state.user = r.user;
-      goHome();
+      goHome(true);
     } catch (e) {
       $('#login-error').textContent = e.message;
       state.pin = '';
@@ -177,7 +181,7 @@
       const r = await Api.call('register', { name, pin: f.get('pin'), emoji: state.emoji });
       Api.setToken(r.token);
       state.user = r.user;
-      goHome();
+      goHome(true);
       if (r.user.isAdmin) toast("You're the first taster, so you're the admin");
     } catch (x) {
       err.textContent = x.message;
@@ -187,13 +191,65 @@
   });
 
   // ─── Home ────────────────────────────────────────────────────────────────
-  function goHome() {
+  // resume = true jumps straight back into a test you're part of (after login or a refresh)
+  function goHome(resume = false) {
     show('screen-home');
     $('#home-emoji').textContent = state.user.emoji;
     $('#home-name').textContent = `Hello, ${state.user.displayName}`;
     $('#admin-panel').hidden = !state.user.isAdmin;
+    $('#create-test').hidden = !state.user.isAdmin;
     if (state.user.isAdmin) loadUsers();
+    loadOpenTests(resume);
   }
+
+  const fmtDate = d => {
+    const dt = new Date(String(d) + 'T12:00:00');
+    return isNaN(dt) ? String(d || '') : dt.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  async function loadOpenTests(resume) {
+    const box = $('#open-tests');
+    let r;
+    try {
+      r = await Api.call('listOpenTests');
+    } catch (e) {
+      box.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+      return;
+    }
+    if ($('#screen-home').hidden) return;
+    if (resume && r.myTestId) return openLobby(r.myTestId);
+
+    box.innerHTML = r.tests.length ? r.tests.map(t => {
+      const mine = t.testId === r.myTestId || t.isOrganiser;
+      const label = mine ? 'Open' : t.status === 'live' ? 'Started' : 'Join';
+      const disabled = !mine && t.status === 'live';
+      return `
+        <div class="test-card">
+          <div class="test-card__info">
+            <p class="test-card__name">${esc(t.name)}</p>
+            <p class="test-card__meta">${esc(t.organiser ? t.organiser.emoji + ' ' + t.organiser.displayName : '')}, ${esc(fmtDate(t.testDate))}</p>
+            <p class="test-card__meta">${t.status === 'live' ? 'Tasting now' : plural(t.tasterCount, 'taster') + ' waiting'}, ${plural(t.sampleCount, 'sample')}</p>
+          </div>
+          <button class="btn${mine ? '' : ' btn--light'}" type="button" data-id="${esc(t.testId)}" data-act="${mine ? 'open' : 'join'}"${disabled ? ' disabled' : ''}>${label}</button>
+        </div>`;
+    }).join('') : '<p class="empty">Nothing\'s on the table yet. When an organiser opens a test, it\'ll show up here.</p>';
+
+    timers.home = setTimeout(() => { if (!$('#screen-home').hidden) loadOpenTests(false); }, document.hidden ? 15000 : 6000);
+  }
+
+  $('#open-tests').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-id]');
+    if (!b) return;
+    if (b.dataset.act === 'open') return openLobby(b.dataset.id);
+    b.disabled = true;
+    try {
+      await Api.call('joinTest', { testId: b.dataset.id });
+      openLobby(b.dataset.id);
+    } catch (x) {
+      toast(x.message);
+      b.disabled = false;
+    }
+  });
 
   $('#logout').addEventListener('click', () => {
     Api.call('logout').catch(() => {});
@@ -281,12 +337,263 @@
     }
   });
 
+  // ─── Creating a test ─────────────────────────────────────────────────────
+  $('#create-test').addEventListener('click', async () => {
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      return toast(e.message);
+    }
+    const today = new Date();
+    const iso = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+
+    openDialog({
+      title: 'Create a test',
+      ok: 'Create test',
+      wide: true,
+      body: `
+        <label>Name<input name="name" maxlength="60" placeholder="Christmas crisps"></label>
+        <label>Date<input name="testDate" type="date" value="${iso}"></label>
+        <label class="check"><input type="checkbox" name="halfPoints"> Allow half points</label>
+        <label class="check"><input type="checkbox" name="tasting" checked> I'm tasting too</label>
+        ${productPicker([])}`,
+      onOpen: wirePicker,
+      onOk: async f => {
+        if (!String(f.get('name') || '').trim()) throw new Error('Give the test a name.');
+        const r = await Api.call('createTest', {
+          name: f.get('name'),
+          testDate: f.get('testDate'),
+          halfPoints: f.get('halfPoints') === 'on',
+          tasting: f.get('tasting') === 'on',
+          productIds: f.getAll('productIds')
+        });
+        toast('Test created. Tasters can join now');
+        openLobby(r.testId);
+      }
+    });
+  });
+
+  // Checkbox list of library products, with a search box. Used when creating
+  // a test and when changing its products in the lobby.
+  function productPicker(selectedIds) {
+    if (!state.products.length) {
+      return '<p class="muted">Your product library is empty. Add products from the home screen first. You can also add them to this test later.</p>';
+    }
+    const sel = new Set(selectedIds);
+    return `
+      <fieldset class="picker">
+        <legend>Products <span class="hint" id="pick-count"></span></legend>
+        <input class="search" type="search" id="pick-search" placeholder="Search products" aria-label="Search products">
+        <ul class="pick-list" id="pick-list">
+          ${state.products.map(p => {
+            const t = typeOf(p.typeId);
+            const pic = p.photoUrl
+              ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+              : `<span aria-hidden="true">${esc(t.icon)}</span>`;
+            const hay = [p.name, p.manufacturer, p.vintage, t.name].join(' ').toLowerCase();
+            return `
+              <li data-hay="${esc(hay)}">
+                <label>
+                  <input type="checkbox" name="productIds" value="${esc(p.productId)}"${sel.has(p.productId) ? ' checked' : ''}>
+                  <span class="pick__pic">${pic}</span>
+                  <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
+                </label>
+              </li>`;
+          }).join('')}
+        </ul>
+      </fieldset>`;
+  }
+
+  function wirePicker(body) {
+    const list = body.querySelector('#pick-list');
+    if (!list) return;
+    const count = () => {
+      const n = list.querySelectorAll('input:checked').length;
+      body.querySelector('#pick-count').textContent = n ? `${n} chosen` : 'None chosen yet';
+    };
+    list.addEventListener('change', count);
+    body.querySelector('#pick-search').addEventListener('input', e => {
+      const q = e.target.value.trim().toLowerCase();
+      list.querySelectorAll('li').forEach(li => { li.hidden = q && !li.dataset.hay.includes(q); });
+    });
+    count();
+  }
+
+  // ─── Lobby ───────────────────────────────────────────────────────────────
+  const lobby = { testId: null, version: null, wasIn: false, test: null };
+
+  async function openLobby(testId) {
+    show('screen-lobby');
+    lobby.testId = testId;
+    lobby.version = null;
+    lobby.wasIn = false;
+    $('#lobby-name').textContent = 'Loading…';
+    $('#lobby-status').textContent = '';
+    $('#lobby-meta').textContent = '';
+    $('#lobby-actions').innerHTML = '';
+    $('#lobby-tasters').innerHTML = '';
+    $('#lobby-products-panel').hidden = true;
+    refreshLobby();
+  }
+
+  async function refreshLobby(force = false) {
+    clearTimeout(timers.lobby);
+    if ($('#screen-lobby').hidden || !lobby.testId) return;
+    if (force) lobby.version = null;
+    try {
+      const s = await Api.call('getTest', { testId: lobby.testId, since: lobby.version });
+      if ($('#screen-lobby').hidden) return;
+      if (!s.unchanged) {
+        lobby.version = s.version;
+        if (renderLobby(s) === false) return;
+      }
+    } catch (e) {
+      if (e.code === 'AUTH') return;
+      toast(e.message);
+    }
+    if (!$('#screen-lobby').hidden) {
+      timers.lobby = setTimeout(refreshLobby, document.hidden ? 10000 : 2500);
+    }
+  }
+
+  // Returns false when we've navigated away
+  function renderLobby(s) {
+    lobby.test = s;
+
+    if (s.status === 'cancelled') {
+      toast(s.isOrganiser ? 'Test cancelled' : 'The organiser cancelled this test');
+      goHome();
+      return false;
+    }
+    if (lobby.wasIn && !s.amIn && !s.isOrganiser) {
+      toast("You've been taken out of this test");
+      goHome();
+      return false;
+    }
+    lobby.wasIn = s.amIn;
+
+    const live = s.status === 'live';
+    $('#lobby-status').textContent = live ? 'Tasting in progress' : 'In the lobby';
+    $('#lobby-name').textContent = s.name;
+    $('#lobby-meta').textContent =
+      `${fmtDate(s.testDate)}. Run by ${s.organiser ? s.organiser.emoji + ' ' + s.organiser.displayName : 'someone'}. ` +
+      `${plural(s.sampleCount, 'sample')} to taste${s.halfPoints ? ', half points allowed' : ''}.`;
+
+    // Actions depend on who you are and where the test is up to
+    let html = '';
+    if (s.isOrganiser && !live) {
+      const why = !s.sampleCount ? 'Add some products first' : !s.participants.length ? 'Waiting for tasters to join' : '';
+      html += `<button class="btn" type="button" data-act="start"${why ? ' disabled' : ''}>Start the test</button>`;
+      html += s.amIn
+        ? '<button class="link" type="button" data-act="leave">Stop tasting myself</button>'
+        : '<button class="link" type="button" data-act="join">Taste as well</button>';
+      html += '<button class="link" type="button" data-act="cancel">Cancel test</button>';
+      if (why) html += `<p class="lobby-hint">${why}.</p>`;
+    } else if (s.isOrganiser && live) {
+      html += '<p class="lobby-hint">The tasting has started. The scoring screens arrive in the next update, so this is as far as it goes for now.</p>';
+      html += '<button class="link" type="button" data-act="cancel">Cancel test</button>';
+    } else if (live) {
+      html += `<p class="lobby-hint">${s.amIn ? "The tasting has started! The scoring screens arrive in the next update, so this is as far as it goes for now." : 'This test has already started.'}</p>`;
+    } else if (s.amIn) {
+      html += `<p class="lobby-hint">You're in. Waiting for ${s.organiser ? esc(s.organiser.displayName) : 'the organiser'} to start…</p>`;
+      html += '<button class="btn btn--ghost" type="button" data-act="leave">Leave test</button>';
+    } else {
+      html += '<button class="btn" type="button" data-act="join">Join this test</button>';
+    }
+    $('#lobby-actions').innerHTML = html;
+
+    $('#lobby-count').textContent = plural(s.participants.length, 'taster');
+    $('#lobby-tasters').innerHTML = s.participants.length ? s.participants.map(u => `
+      <div class="lobby-taster">
+        <span class="taster__emoji" aria-hidden="true">${esc(u.emoji)}</span>
+        <span>${esc(u.displayName)}</span>
+        ${s.isOrganiser && !live && u.userId !== state.user.userId
+          ? `<button class="lobby-taster__x" type="button" data-remove="${esc(u.userId)}" aria-label="Remove ${esc(u.displayName)}">×</button>`
+          : ''}
+      </div>`).join('') : '<p class="empty">Nobody yet.</p>';
+
+    const showProducts = s.isOrganiser && !live;
+    $('#lobby-products-panel').hidden = !showProducts;
+    if (showProducts) {
+      $('#lobby-products').innerHTML = s.products.length ? s.products.map(p => `
+        <li>
+          <span class="pick__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🍽️'}</span>
+          <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
+        </li>`).join('') : '<li class="empty">No products yet. Tap Change to add some.</li>';
+    }
+    return true;
+  }
+
+  $('#lobby-home').addEventListener('click', () => goHome());
+
+  $('#lobby-actions').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]');
+    if (!b) return;
+    const s = lobby.test;
+    const act = b.dataset.act;
+
+    if (act === 'start' && !confirm('Start the test? Samples get shuffled and nobody else can join.')) return;
+    if (act === 'cancel' && !confirm('Cancel this test? Everyone in the lobby will be sent home.')) return;
+
+    b.disabled = true;
+    try {
+      if (act === 'join') await Api.call('joinTest', { testId: s.testId });
+      if (act === 'leave') {
+        await Api.call('leaveTest', { testId: s.testId });
+        if (!s.isOrganiser) { toast('You left the test'); return goHome(); }
+      }
+      if (act === 'start') await Api.call('startTest', { testId: s.testId });
+      if (act === 'cancel') {
+        await Api.call('cancelTest', { testId: s.testId });
+        toast('Test cancelled');
+        return goHome();
+      }
+      refreshLobby(true);
+    } catch (x) {
+      toast(x.message);
+      b.disabled = false;
+    }
+  });
+
+  $('#lobby-tasters').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-remove]');
+    if (!b) return;
+    const u = lobby.test.participants.find(x => x.userId === b.dataset.remove);
+    if (!confirm(`Take ${u.displayName} out of this test?`)) return;
+    try {
+      await Api.call('removeParticipant', { testId: lobby.testId, userId: u.userId });
+      refreshLobby(true);
+    } catch (x) {
+      toast(x.message);
+    }
+  });
+
+  $('#lobby-edit-products').addEventListener('click', async () => {
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      return toast(e.message);
+    }
+    openDialog({
+      title: 'Products in this test',
+      ok: 'Save',
+      wide: true,
+      body: productPicker(lobby.test.products.map(p => p.productId)),
+      onOpen: wirePicker,
+      onOk: async f => {
+        await Api.call('updateTestProducts', { testId: lobby.testId, productIds: f.getAll('productIds') });
+        toast('Products updated');
+        refreshLobby(true);
+      }
+    });
+  });
+
   // ─── Product library ─────────────────────────────────────────────────────
   Object.assign(state, { types: [], products: [], filter: 'all', search: '' });
   let pendingPhoto = null;
 
   $('#open-products').addEventListener('click', goProducts);
-  $('#products-back').addEventListener('click', goHome);
+  $('#products-back').addEventListener('click', () => goHome());
   $('#add-product').addEventListener('click', () => openProduct(null));
   $('#add-type').addEventListener('click', () => openType(null));
 

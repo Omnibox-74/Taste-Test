@@ -2,6 +2,7 @@
  * Taste Test — Apps Script backend
  * Phase 1: workbook setup, API router, login and taster management.
  * Phase 2: types, product library, photo uploads to Drive.
+ * Phase 3: creating tests, choosing products, the lobby.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -15,7 +16,7 @@ const SCHEMA = {
   Sessions:         ['token', 'userId', 'created', 'expires'],
   Types:            ['typeId', 'name', 'icon'],
   Products:         ['productId', 'productLine', 'name', 'manufacturer', 'typeId', 'vintage', 'description', 'photoUrl', 'created', 'createdBy'],
-  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created'],
+  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt'],
   TestProducts:     ['testId', 'sampleNo', 'productId', 'order'],
   TestParticipants: ['testId', 'userId', 'joinedAt', 'status'],
   Scores:           ['testId', 'sampleNo', 'userId', 'niceness', 'authenticity', 'flavourGuess', 'guessCorrect', 'comment', 'phaseOpenedAt', 'nicenessAt', 'authenticityAt'],
@@ -96,7 +97,18 @@ const ROUTES = {
   listProducts:    { auth: 'admin', fn: listProducts },
   saveProduct:     { auth: 'admin', fn: saveProduct },
   deleteProduct:   { auth: 'admin', fn: deleteProduct },
-  uploadPhoto:     { auth: 'admin', fn: uploadPhoto }
+  uploadPhoto:     { auth: 'admin', fn: uploadPhoto },
+
+  // Phase 3: tests and the lobby
+  listOpenTests:      { auth: true,    fn: listOpenTests },
+  getTest:            { auth: true,    fn: getTest },
+  joinTest:           { auth: true,    fn: joinTest },
+  leaveTest:          { auth: true,    fn: leaveTest },
+  createTest:         { auth: 'admin', fn: createTest },
+  updateTestProducts: { auth: 'admin', fn: updateTestProducts },
+  removeParticipant:  { auth: 'admin', fn: removeParticipant },
+  startTest:          { auth: 'admin', fn: startTest },
+  cancelTest:         { auth: 'admin', fn: cancelTest }
 };
 
 function doPost(e) {
@@ -120,7 +132,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return json_({ ok: true, data: { app: 'Taste Test', phase: 2 } });
+  return json_({ ok: true, data: { app: 'Taste Test', phase: 3 } });
 }
 
 // ─── Tasters & login ─────────────────────────────────────────────────────────
@@ -359,6 +371,250 @@ function trashDrivePhoto_(url) {
   try { DriveApp.getFileById(m[1]).setTrashed(true); } catch (e) { /* already gone */ }
 }
 
+// ─── Tests: setup and lobby ──────────────────────────────────────────────────
+// Status runs: lobby → live → finished (or cancelled at any point).
+const ACTIVE = ['lobby', 'live'];
+
+function createTest(p, user) {
+  const name = cleanText_(p.name, 'test name', 60, true);
+  const testDate = /^\d{4}-\d{2}-\d{2}$/.test(p.testDate) ? p.testDate : today_();
+
+  return withLock_(() => {
+    const productIds = checkProductIds_(p.productIds);
+    if (readTable_('Tests').some(t => t.organiserId === user.userId && ACTIVE.indexOf(t.status) > -1)) {
+      throw err_("You're already running a test. Finish or cancel it first.");
+    }
+    if (p.tasting && activeTestsFor_(user.userId).length) {
+      throw err_("You're already tasting in another test. Leave it first, or untick \"I'm tasting too\".");
+    }
+    const now = Date.now();
+    const test = {
+      testId: newId_('X'), name, testDate, organiserId: user.userId, status: 'lobby',
+      halfPoints: !!p.halfPoints, currentSample: '', phase: '', phaseOpenedAt: '',
+      version: now, created: now, source: 'live', startedAt: '', finishedAt: ''
+    };
+    appendRow_('Tests', test);
+    appendRows_('TestProducts', productIds.map(id => ({ testId: test.testId, sampleNo: '', productId: id, order: '' })));
+    if (p.tasting) appendRow_('TestParticipants', { testId: test.testId, userId: user.userId, joinedAt: now, status: 'in' });
+    setVersionCache_(test.testId, now);
+    return { testId: test.testId };
+  });
+}
+
+function updateTestProducts(p, user) {
+  return withLock_(() => {
+    const t = organisersTest_(p.testId, user, 'lobby');
+    const productIds = checkProductIds_(p.productIds);
+    deleteWhere_('TestProducts', x => x.testId === t.testId);
+    appendRows_('TestProducts', productIds.map(id => ({ testId: t.testId, sampleNo: '', productId: id, order: '' })));
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function listOpenTests(p, user) {
+  const tests = readTable_('Tests').filter(t => ACTIVE.indexOf(t.status) > -1);
+  if (!tests.length) return { tests: [], myTestId: null };
+
+  const users = userMap_();
+  const parts = readTable_('TestParticipants').filter(x => x.status === 'in');
+  const samples = readTable_('TestProducts');
+  const ids = tests.map(t => t.testId);
+  const mine = parts.find(x => x.userId === user.userId && ids.indexOf(x.testId) > -1);
+  const organising = tests.find(t => t.organiserId === user.userId);
+
+  return {
+    myTestId: mine ? mine.testId : (organising ? organising.testId : null),
+    tests: tests
+      .sort((a, b) => Number(b.created) - Number(a.created))
+      .map(t => ({
+        testId: t.testId, name: String(t.name), testDate: t.testDate, status: t.status,
+        organiser: users[t.organiserId],
+        isOrganiser: t.organiserId === user.userId,
+        tasterCount: parts.filter(x => x.testId === t.testId).length,
+        sampleCount: samples.filter(x => x.testId === t.testId).length
+      }))
+  };
+}
+
+// The lobby polls this every few seconds. If nothing has changed since the
+// version the browser already has, it answers from cache without reading the sheet.
+function getTest(p, user) {
+  const cache = CacheService.getScriptCache();
+  const since = p.since ? String(p.since) : '';
+  const cached = cache.get('tv_' + p.testId);
+  if (since && cached === since) return { unchanged: true, version: Number(cached) };
+
+  const t = findTest_(p.testId);
+  if (!t) throw err_("That test doesn't exist any more.");
+  const version = Number(t.version);
+  setVersionCache_(t.testId, version);
+  if (since && Number(since) === version) return { unchanged: true, version };
+
+  const users = userMap_();
+  const parts = readTable_('TestParticipants')
+    .filter(x => x.testId === t.testId && x.status === 'in')
+    .sort((a, b) => Number(a.joinedAt) - Number(b.joinedAt));
+  const samples = readTable_('TestProducts').filter(x => x.testId === t.testId);
+  const isOrganiser = t.organiserId === user.userId;
+
+  const out = {
+    version, testId: t.testId, name: String(t.name), testDate: t.testDate, status: t.status,
+    halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId], isOrganiser,
+    amIn: parts.some(x => x.userId === user.userId),
+    participants: parts.map(x => users[x.userId]).filter(Boolean),
+    sampleCount: samples.length,
+    currentSample: t.currentSample, phase: t.phase
+  };
+
+  // Only the organiser sees product names, and only before the test starts.
+  if (isOrganiser && t.status === 'lobby') {
+    const products = productMap_();
+    out.products = samples.map(x => products[x.productId]).filter(Boolean).map(pr => ({
+      productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
+      vintage: String(pr.vintage), photoUrl: pr.photoUrl, typeId: pr.typeId
+    }));
+  }
+  return out;
+}
+
+function joinTest(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.status !== 'lobby') {
+      throw err_(t && t.status === 'live' ? 'That test has already started.' : "That test isn't open any more.");
+    }
+    const current = activeTestsFor_(user.userId);
+    if (current.some(x => x.testId === t.testId)) return true;
+    if (current.length) throw err_("You're already in " + current[0].name + '. Leave it first.');
+
+    const prev = readTable_('TestParticipants').find(x => x.testId === t.testId && x.userId === user.userId);
+    if (prev) updateRow_('TestParticipants', prev._row, { status: 'in', joinedAt: Date.now() });
+    else appendRow_('TestParticipants', { testId: t.testId, userId: user.userId, joinedAt: Date.now(), status: 'in' });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function leaveTest(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t) throw err_('Test not found.');
+    if (t.status !== 'lobby') throw err_('The tasting has started. Ask the organiser if you need to drop out.');
+    const row = readTable_('TestParticipants').find(x => x.testId === t.testId && x.userId === user.userId && x.status === 'in');
+    if (row) updateRow_('TestParticipants', row._row, { status: 'left' });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function removeParticipant(p, user) {
+  return withLock_(() => {
+    const t = organisersTest_(p.testId, user, 'lobby');
+    const row = readTable_('TestParticipants').find(x => x.testId === t.testId && x.userId === p.userId && x.status === 'in');
+    if (row) updateRow_('TestParticipants', row._row, { status: 'removed' });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function startTest(p, user) {
+  return withLock_(() => {
+    const t = organisersTest_(p.testId, user, 'lobby');
+    const samples = readTable_('TestProducts').filter(x => x.testId === t.testId);
+    const tasters = readTable_('TestParticipants').filter(x => x.testId === t.testId && x.status === 'in');
+    if (!samples.length) throw err_('Add at least one product first.');
+    if (!tasters.length) throw err_('Nobody has joined yet.');
+
+    // Shuffle so nobody, organiser included, knows which sample is which.
+    const order = samples.map((_, i) => i + 1);
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = order[i]; order[i] = order[j]; order[j] = tmp;
+    }
+    samples.forEach((row, i) => updateRow_('TestProducts', row._row, { sampleNo: order[i], order: order[i] }));
+
+    const now = Date.now();
+    updateRow_('Tests', t._row, {
+      status: 'live', currentSample: 1, phase: 'niceness', phaseOpenedAt: now, startedAt: now, version: now
+    });
+    setVersionCache_(t.testId, now);
+    return true;
+  });
+}
+
+function cancelTest(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t) throw err_('Test not found.');
+    if (t.organiserId !== user.userId) throw err_('Only the organiser can cancel this test.');
+    if (ACTIVE.indexOf(t.status) === -1) return true;
+    const now = Date.now();
+    updateRow_('Tests', t._row, { status: 'cancelled', finishedAt: now, version: now });
+    setVersionCache_(t.testId, now);
+    return true;
+  });
+}
+
+// ─── Test helpers ────────────────────────────────────────────────────────────
+function findTest_(testId) {
+  return readTable_('Tests').find(t => t.testId === testId) || null;
+}
+
+function organisersTest_(testId, user, status) {
+  const t = findTest_(testId);
+  if (!t) throw err_('Test not found.');
+  if (t.organiserId !== user.userId) throw err_('Only the organiser can do that.');
+  if (status && t.status !== status) {
+    throw err_(t.status === 'live' ? 'The test has already started.' : "That test isn't open any more.");
+  }
+  return t;
+}
+
+function activeTestsFor_(userId) {
+  const active = readTable_('Tests').filter(t => ACTIVE.indexOf(t.status) > -1);
+  const ids = readTable_('TestParticipants')
+    .filter(x => x.userId === userId && x.status === 'in')
+    .map(x => x.testId);
+  return active.filter(t => ids.indexOf(t.testId) > -1);
+}
+
+function checkProductIds_(list) {
+  const ids = Array.isArray(list) ? list.map(String) : [];
+  const unique = ids.filter((id, i) => ids.indexOf(id) === i);
+  if (unique.length > 40) throw err_('A test can have up to 40 products.');
+  const known = productMap_();
+  unique.forEach(id => { if (!known[id]) throw err_('One of those products has been deleted. Refresh and try again.'); });
+  return unique;
+}
+
+function bumpTest_(t) {
+  const v = Math.max(Date.now(), Number(t.version) + 1);
+  updateRow_('Tests', t._row, { version: v });
+  setVersionCache_(t.testId, v);
+  return v;
+}
+
+function setVersionCache_(testId, v) {
+  CacheService.getScriptCache().put('tv_' + testId, String(v), 21600);
+}
+
+function userMap_() {
+  const map = {};
+  readTable_('Users').forEach(u => { map[u.userId] = publicUser_(u); });
+  return map;
+}
+
+function productMap_() {
+  const map = {};
+  readTable_('Products').forEach(x => { map[x.productId] = x; });
+  return map;
+}
+
+function today_() {
+  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
+}
+
 // ─── Auth helpers ────────────────────────────────────────────────────────────
 function createSession_(userId) {
   const now = Date.now();
@@ -473,6 +729,14 @@ function headers_(name) {
 
 function appendRow_(name, obj) {
   sheet_(name).appendRow(headers_(name).map(h => (obj[h] === undefined || obj[h] === null ? '' : obj[h])));
+}
+
+function appendRows_(name, objs) {
+  if (!objs.length) return;
+  const sh = sheet_(name);
+  const headers = headers_(name);
+  const rows = objs.map(o => headers.map(h => (o[h] === undefined || o[h] === null ? '' : o[h])));
+  sh.getRange(sh.getLastRow() + 1, 1, rows.length, headers.length).setValues(rows);
 }
 
 function updateRow_(name, row, patch) {
