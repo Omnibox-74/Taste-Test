@@ -1137,7 +1137,45 @@
     renderCharts();
     renderTasterProfiles();
     renderNotes();
+    renderResultsAdmin();
   }
+
+  function renderResultsAdmin() {
+    const panel = $('#res-admin');
+    const t = results.data.test;
+    panel.hidden = !state.user.isAdmin;
+    if (panel.hidden) return;
+    const canConvert = t.source !== 'open' && results.stats.samples.length === 1;
+    panel.innerHTML = `
+      <h2>Admin</h2>
+      ${canConvert ? `
+        <p class="muted">Only one product in this test? Turn it into an open tasting. Everyone's scores are kept, and others can add theirs.</p>
+        <button class="btn btn--ghost" type="button" data-res-admin="convert">Turn into an open tasting</button>` : ''}
+      <p class="muted">Deleting removes this test and all its scores, notes and guesses for good. The products stay in your library.</p>
+      <button class="btn btn--ghost btn--danger" type="button" data-res-admin="delete">Delete this test</button>`;
+  }
+
+  $('#res-admin').addEventListener('click', async e => {
+    const b = e.target.closest('[data-res-admin]');
+    if (!b) return;
+    const t = results.data.test;
+    if (b.dataset.resAdmin === 'convert') {
+      if (!confirm(`Turn "${t.name}" into an open tasting? It will appear on everyone's home screen for more scores.`)) return;
+      try {
+        await Api.call('convertToOpen', { testId: t.testId });
+        toast('Now an open tasting');
+        openOpenTasting(t.testId);
+      } catch (x) { toast(x.message); }
+    }
+    if (b.dataset.resAdmin === 'delete') {
+      if (!confirm(`Delete "${t.name}" and all its scores? This can't be undone.`)) return;
+      try {
+        await Api.call('deleteTest', { testId: t.testId });
+        toast('Test deleted');
+        goHistory();
+      } catch (x) { toast(x.message); }
+    }
+  });
 
   // ── Ranking ──
   function renderRanking() {

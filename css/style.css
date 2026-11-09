@@ -1033,3 +1033,26 @@ label.check input { width: 1.3rem; height: 1.3rem; margin: 0; accent-color: var(
 .compare-table thead th { min-width: 4.8rem; }
 .compare-table th, .compare-table td { padding: .45rem .3rem; }
 dialog .chart-box { max-width: 100%; overflow: hidden; }
+
+/* ─── Open tastings ─── */
+.home-sub { margin-top: 1.25rem; }
+.test-card--open { gap: .8rem; }
+.test-card__pic {
+  flex: none;
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .9);
+  display: grid;
+  place-items: center;
+  font-size: 1.6rem;
+}
+.test-card__pic img { width: 100%; height: 100%; object-fit: contain; }
+.test-card--open .test-card__info { flex: 1; }
+.badge--open { background: var(--green); }
+#screen-open .panel { margin-bottom: 1.25rem; }
+#screen-open .org-sub { margin-top: 1.25rem; }
+#screen-open .stars { margin-top: .5rem; }
+.btn--danger { color: var(--red); }
+#res-admin .btn { margin-bottom: 1rem; }

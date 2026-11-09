@@ -134,7 +134,9 @@ const ROUTES = {
   getOpenTasting:     { auth: true,    fn: getOpenTasting },
   submitOpenScore:    { auth: true,    fn: submitOpenScore },
   createOpenTasting:  { auth: 'admin', fn: createOpenTasting },
-  setOpenTasting:     { auth: 'admin', fn: setOpenTasting }
+  setOpenTasting:     { auth: 'admin', fn: setOpenTasting },
+  convertToOpen:      { auth: 'admin', fn: convertToOpen },
+  deleteTest:         { auth: 'admin', fn: deleteTest }
 };
 
 function doPost(e) {
@@ -1148,6 +1150,33 @@ function setOpenTasting(p) {
     updateRow_('Tests', t._row, p.open
       ? { status: 'open', finishedAt: '', version: now }
       : { status: 'finished', finishedAt: now, version: now });
+    return true;
+  });
+}
+
+// A finished single-product test becomes an open tasting, keeping its scores
+function convertToOpen(p) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.status !== 'finished') throw err_('Only finished tests can be turned into open tastings.');
+    if (t.source === 'open') throw err_('This is already an open tasting. Use Reopen on its page.');
+    const samples = readTable_('TestProducts').filter(x => x.testId === t.testId && x.sampleNo !== '');
+    if (samples.length !== 1) throw err_('Only tests with a single product can become open tastings.');
+    const now = Date.now();
+    updateRow_('Tests', t._row, { source: 'open', status: 'open', phase: 'open', finishedAt: '', version: now });
+    return true;
+  });
+}
+
+// Removes a test and everything recorded in it. Products stay in the library.
+function deleteTest(p) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t) throw err_('Test not found.');
+    if (ACTIVE.indexOf(t.status) > -1) throw err_('This test is still running. Cancel it first.');
+    ['Notes', 'Scores', 'TestParticipants', 'TestProducts'].forEach(tab => deleteWhere_(tab, x => x.testId === t.testId));
+    deleteWhere_('Tests', x => x.testId === t.testId);
+    CacheService.getScriptCache().remove('tv_' + t.testId);
     return true;
   });
 }
