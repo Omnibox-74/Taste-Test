@@ -1056,3 +1056,54 @@ dialog .chart-box { max-width: 100%; overflow: hidden; }
 #screen-open .stars { margin-top: .5rem; }
 .btn--danger { color: var(--red); }
 #res-admin .btn { margin-bottom: 1rem; }
+
+/* ─── Multi-product open tastings ─── */
+.pic-stack { display: flex; flex: none; }
+.pic-stack .test-card__pic { width: 2.9rem; height: 2.9rem; border: 2px solid rgba(255, 255, 255, .9); }
+.pic-stack .test-card__pic + .test-card__pic { margin-left: -1.4rem; }
+.test-card__progress { font-weight: 700; opacity: 1; }
+
+.progress-panel__count { font: 800 1.25rem/1.3 var(--display); margin: 0 0 .6rem; }
+.progress-panel .muted { margin: .6rem 0 0; }
+.bar--big { height: .8rem; }
+
+.open-items { list-style: none; margin: .5rem 0 .5rem; padding: 0; }
+.open-item { border-top: 1px solid var(--line); }
+.open-item__head {
+  display: grid;
+  grid-template-columns: 2.8rem 1fr auto;
+  gap: .75rem;
+  align-items: center;
+  width: 100%;
+  padding: .75rem 0;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  scroll-margin-top: 1rem;
+}
+.open-item__text { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.open-item__text .muted { font-size: .9rem; }
+.open-item__avg { font-size: .88rem; color: var(--muted); }
+.open-item__status {
+  font-weight: 700;
+  font-size: .85rem;
+  white-space: nowrap;
+  padding: .3rem .65rem;
+  border-radius: 999px;
+  background: var(--star);
+  color: #1B1F33;
+}
+.open-item__status:empty { display: none; }
+.open-item__status--done { background: var(--green); color: #FFFFFF; }
+.open-item--open .open-item__head { padding-bottom: .4rem; }
+.open-item__body { padding: 0 0 1.25rem; }
+.open-item__body .org-sub:first-child { margin-top: .5rem; }
+.pic-stack .test-card__pic { width: 2.6rem; height: 2.6rem; }
+.pic-stack .test-card__pic + .test-card__pic { margin-left: -1.9rem; }
+.pic-stack .test-card__pic:nth-child(n+4) { display: none; }
+.test-card--open .test-card__info { min-width: 0; }
+.test-card--open .test-card__name { font-size: 1.05rem; }
+#open-admin .btn { margin-bottom: 1.25rem; }
