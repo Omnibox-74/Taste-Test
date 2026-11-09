@@ -1042,7 +1042,415 @@
           <span class="sofar__scores"><span title="Niceness">😋 ${fmtAvg(r.niceness)}</span><span title="Authenticity">🎯 ${fmtAvg(r.authenticity)}</span></span>
         </li>`).join('')}
       </ul>
-      ${finished ? '<p class="muted">Full stats, awards, word clouds and taster profiles are coming in the next update.</p>' : ''}`;
+      ${finished ? `<button class="btn btn--wide" type="button" id="full-results" data-id="${esc(s.testId)}">See the full results</button>` : ''}`;
+  }
+
+  $('#sofar-panel').addEventListener('click', e => {
+    const b = e.target.closest('#full-results');
+    if (b) openResults(b.dataset.id, 'live');
+  });
+
+  // ─── Past tests ──────────────────────────────────────────────────────────
+  $('#open-history').addEventListener('click', goHistory);
+  $('#history-back').addEventListener('click', () => goHome());
+
+  async function goHistory() {
+    show('screen-history');
+    const box = $('#history-list');
+    box.innerHTML = '<p class="loading">Fetching past tests…</p>';
+    let list;
+    try {
+      list = await Api.call('listPastTests');
+    } catch (e) {
+      box.innerHTML = `<p class="error">${esc(e.message)}</p>`;
+      return;
+    }
+    box.innerHTML = list.length ? list.map(t => `
+      <button type="button" class="history-card" data-id="${esc(t.testId)}">
+        <span class="history-card__pic">${t.winner && t.winner.photoUrl
+          ? `<img src="${esc(t.winner.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🏆'}</span>
+        <span class="history-card__text">
+          <strong>${esc(t.name)}</strong>
+          <span>${esc(fmtDate(t.testDate))}${t.source === 'paper' ? ' <span class="badge badge--paper">From paper</span>' : ''}</span>
+          <span>${plural(t.sampleCount, 'sample')}, ${plural(t.tasterCount, 'taster')}</span>
+          ${t.winner ? `<span class="history-card__win">🏆 ${esc(t.winner.name)}</span>` : ''}
+        </span>
+      </button>`).join('')
+      : '<p class="empty">No finished tests yet. Once you\'ve run one, it\'ll be here.</p>';
+  }
+
+  $('#history-list').addEventListener('click', e => {
+    const b = e.target.closest('.history-card');
+    if (b) openResults(b.dataset.id, 'history');
+  });
+
+  // ─── Results ─────────────────────────────────────────────────────────────
+  const results = { from: 'history', data: null, stats: null, sort: 'total', picked: [], charts: [] };
+
+  $('#results-back').addEventListener('click', () => {
+    if (results.from === 'live' && lobby.testId) return openLobby(lobby.testId);
+    if (results.from === 'history') return goHistory();
+    goHome();
+  });
+
+  async function openResults(testId, from) {
+    results.from = from;
+    show('screen-results');
+    $('#res-title').textContent = 'Loading…';
+    $('#res-eyebrow').textContent = '';
+    $('#res-meta').textContent = '';
+    ['ranking', 'awards', 'charts', 'tasters', 'notes'].forEach(k => { $('#res-' + k).innerHTML = ''; });
+    let data;
+    try {
+      data = await Api.call('getResults', { testId });
+    } catch (e) {
+      $('#res-title').textContent = 'Oops';
+      $('#res-meta').textContent = e.message;
+      return;
+    }
+    results.data = data;
+    results.stats = Stats.compute(data);
+    results.sort = 'total';
+    results.picked = results.stats.tasters.slice(0, 1).map(t => t.userId);
+    renderResults();
+  }
+
+  const userById = id => (results.data.tasters.find(u => u.userId === id) || { emoji: '👤', displayName: 'Someone' });
+  const picHTML = (s, cls = 'pick__pic') =>
+    `<span class="${cls}">${s.photoUrl ? `<img src="${esc(s.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(s.typeIcon || '🍽️')}</span>`;
+  const bar = (v, cls) => `<span class="bar"><span class="bar__fill ${cls}" style="width:${v == null ? 0 : (v / 5) * 100}%"></span></span>`;
+
+  function renderResults() {
+    const { data, stats } = results;
+    const t = data.test;
+    $('#res-eyebrow').textContent = t.source === 'paper' ? 'From paper' : 'Results';
+    $('#res-title').textContent = t.name;
+    $('#res-meta').textContent = `${fmtDate(t.testDate)}. ${plural(stats.samples.length, 'sample')}, ${plural(stats.tasters.length, 'taster')}` +
+      (t.organiser ? `. Run by ${t.organiser.emoji} ${t.organiser.displayName}` : '') + '.';
+    renderRanking();
+    renderAwards();
+    renderCharts();
+    renderTasterProfiles();
+    renderNotes();
+  }
+
+  // ── Ranking ──
+  function renderRanking() {
+    const key = results.sort;
+    const list = [...results.stats.samples].sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1));
+    const medal = i => ['🥇', '🥈', '🥉'][i] || String(i + 1);
+    const tabs = [['total', 'Overall'], ['nice', 'Niceness'], ['auth', 'Authenticity']];
+    $('#res-ranking').innerHTML = `
+      <h2>Ranking</h2>
+      <div class="chips" role="group" aria-label="Rank by">${tabs.map(([k, l]) =>
+        `<button type="button" class="chip${k === key ? ' chip--on' : ''}" data-sort="${k}" aria-pressed="${k === key}">${l}</button>`).join('')}</div>
+      <ol class="ranking">${list.map((s, i) => `
+        <li><button type="button" class="rank-row" data-sample="${s.sampleNo}">
+          <span class="rank-row__pos">${medal(i)}</span>
+          ${picHTML(s)}
+          <span class="rank-row__main">
+            <strong>${esc(s.name)}</strong>
+            <span class="rank-row__sub">${esc(s.manufacturer)}${s.vintage ? ', ' + esc(s.vintage) : ''}</span>
+            <span class="rank-row__bars">
+              <span class="rank-row__bar">😋 ${bar(s.nice, 'bar__fill--n')}<b>${fmtAvg(s.nice)}</b></span>
+              <span class="rank-row__bar">🎯 ${bar(s.auth, 'bar__fill--a')}<b>${fmtAvg(s.auth)}</b></span>
+            </span>
+          </span>
+        </button></li>`).join('')}
+      </ol>
+      <p class="muted">Tap a product to see everyone's scores, guesses and comments.</p>`;
+  }
+
+  $('#res-ranking').addEventListener('click', e => {
+    const chip = e.target.closest('[data-sort]');
+    if (chip) { results.sort = chip.dataset.sort; return renderRanking(); }
+    const row = e.target.closest('[data-sample]');
+    if (row) openSampleDetail(Number(row.dataset.sample));
+  });
+
+  function openSampleDetail(sampleNo) {
+    const s = results.stats.samples.find(x => x.sampleNo === sampleNo);
+    const rows = [...s.scores].sort((a, b) => ((b.niceness ?? 0) + (b.authenticity ?? 0)) - ((a.niceness ?? 0) + (a.authenticity ?? 0)));
+    const noteCounts = {};
+    s.notes.forEach(n => { noteCounts[n.note] = (noteCounts[n.note] || 0) + 1; });
+    const cloud = Object.keys(noteCounts).map(word => ({ word, count: noteCounts[word] }));
+    openDialog({
+      title: s.name,
+      ok: 'Done',
+      wide: true,
+      noCancel: true,
+      body: `
+        <div class="detail-head">
+          ${picHTML(s, 'detail-head__pic')}
+          <div>
+            <p class="muted">${esc(s.manufacturer)}${s.vintage ? ', ' + esc(s.vintage) : ''}. Sample ${s.sampleNo}${s.bowl ? `, bowl ${esc(s.bowl)}` : ''}.</p>
+            <p class="detail-head__scores">😋 ${fmtAvg(s.nice)} &nbsp; 🎯 ${fmtAvg(s.auth)}</p>
+          </div>
+        </div>
+        ${s.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(s.description)}</p>` : ''}
+        <ul class="detail-scores">${rows.map(r => {
+          const u = userById(r.userId);
+          return `<li>
+            <span class="detail-scores__who">${esc(u.emoji)} ${esc(u.displayName)}</span>
+            <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+            ${r.guess ? `<span class="detail-scores__extra">Guessed “${esc(r.guess)}”${r.guessCorrect === true ? ' ✅' : r.guessCorrect === false ? ' ❌' : ''}</span>` : ''}
+            ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
+          </li>`;
+        }).join('')}</ul>
+        ${cloud.length ? `<h3 class="org-sub">Notes of…</h3>${cloudHTML(cloud)}` : ''}`,
+      onOk: async () => {}
+    });
+  }
+
+  // ── Awards ──
+  function renderAwards() {
+    const awards = results.stats.awards;
+    $('#res-awards').innerHTML = `
+      <h2>Awards</h2>
+      ${awards.length ? `<div class="awards">${awards.map(a => {
+        const who = a.kind === 'product'
+          ? `${esc(a.sample.name)}`
+          : `${esc(a.taster.emoji)} ${esc(a.taster.displayName)}`;
+        return `<div class="award">
+          <span class="award__icon" aria-hidden="true">${a.icon}</span>
+          <span class="award__title">${esc(a.title)}</span>
+          <strong class="award__who">${who}</strong>
+          <span class="award__detail">${esc(a.detail)}</span>
+        </div>`;
+      }).join('')}</div>` : '<p class="empty">Not enough scores for awards.</p>'}`;
+  }
+
+  // ── Charts ──
+  function chartColours() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = n => cs.getPropertyValue(n).trim();
+    return { red: v('--red'), blue: v('--blue'), green: v('--green'), star: v('--star'), ink: v('--ink'), muted: v('--muted'), line: v('--line'), body: v('--body') };
+  }
+  const PALETTE = ['#C8243A', '#2346C2', '#137F4E', '#F5B700', '#8E44AD', '#E67E22', '#16A2B8', '#D63384', '#6C757D', '#5C3D2E'];
+
+  function resetCharts() {
+    results.charts.forEach(c => c.destroy());
+    results.charts = [];
+  }
+
+  function renderCharts() {
+    resetCharts();
+    const panel = $('#res-charts');
+    if (typeof window.Chart === 'undefined') {
+      panel.innerHTML = '<h2>Charts</h2><p class="muted">The charts couldn\'t load. Check your connection and reopen the results.</p>';
+      return;
+    }
+    const st = results.stats;
+    panel.innerHTML = `
+      <h2>Charts</h2>
+      <h3 class="org-sub">Nice or true?</h3>
+      <p class="muted">Top right is tasty and true to the packet. Top left is true but not nice. Bottom right is a happy accident.</p>
+      <div class="chart-box chart-box--square"><canvas id="chart-scatter" aria-label="Niceness against authenticity for each product" role="img"></canvas></div>
+      <h3 class="org-sub">Product by product</h3>
+      <div class="chart-box" style="height:${Math.max(220, st.samples.length * 46 + 70)}px"><canvas id="chart-bars" aria-label="Average niceness and authenticity per product" role="img"></canvas></div>
+      <h3 class="org-sub">Every star given</h3>
+      <div class="chart-box chart-box--pie"><canvas id="chart-pie" aria-label="How often each score was given" role="img"></canvas></div>`;
+
+    const c = chartColours();
+    Chart.defaults.color = c.muted;
+    Chart.defaults.borderColor = c.line;
+    Chart.defaults.font.family = c.body;
+    Chart.defaults.font.size = 13;
+    const short = n => (n.length > 18 ? n.slice(0, 17) + '…' : n);
+    const scored = st.samples.filter(s => s.nice != null && s.auth != null);
+
+    results.charts.push(new Chart($('#chart-scatter'), {
+      type: 'scatter',
+      data: {
+        datasets: scored.map((s, i) => ({
+          label: short(s.name),
+          data: [{ x: s.nice, y: s.auth }],
+          backgroundColor: PALETTE[i % PALETTE.length],
+          pointRadius: 9,
+          pointHoverRadius: 11
+        }))
+      },
+      options: {
+        maintainAspectRatio: false,
+        scales: {
+          x: { min: 0, max: 5, title: { display: true, text: 'Niceness' }, ticks: { stepSize: 1 } },
+          y: { min: 0, max: 5, title: { display: true, text: 'Authenticity' }, ticks: { stepSize: 1 } }
+        },
+        plugins: {
+          legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
+          tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.x.toFixed(1)} nice, ${ctx.parsed.y.toFixed(1)} true` } }
+        }
+      },
+      plugins: [{
+        id: 'quadrants',
+        beforeDatasetsDraw(chart) {
+          const { ctx, scales: { x, y } } = chart;
+          ctx.save();
+          ctx.strokeStyle = c.line;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(x.getPixelForValue(2.5), y.top); ctx.lineTo(x.getPixelForValue(2.5), y.bottom);
+          ctx.moveTo(x.left, y.getPixelForValue(2.5)); ctx.lineTo(x.right, y.getPixelForValue(2.5));
+          ctx.stroke();
+          ctx.restore();
+        }
+      }]
+    }));
+
+    results.charts.push(new Chart($('#chart-bars'), {
+      type: 'bar',
+      data: {
+        labels: st.samples.map(s => short(s.name)),
+        datasets: [
+          { label: 'Niceness', data: st.samples.map(s => s.nice), backgroundColor: c.red, borderRadius: 4 },
+          { label: 'Authenticity', data: st.samples.map(s => s.auth), backgroundColor: c.green, borderRadius: 4 }
+        ]
+      },
+      options: {
+        indexAxis: 'y',
+        maintainAspectRatio: false,
+        scales: { x: { min: 0, max: 5, ticks: { stepSize: 1 } } },
+        plugins: { legend: { position: 'bottom' } }
+      }
+    }));
+
+    const keys = Object.keys(st.distribution).map(Number).sort((a, b) => a - b);
+    const shade = v => {
+      const t = (v - 0.5) / 4.5;   // 0 → red, 1 → green, via gold
+      return t < 0.5 ? mix('#C8243A', '#F5B700', t * 2) : mix('#F5B700', '#137F4E', (t - 0.5) * 2);
+    };
+    results.charts.push(new Chart($('#chart-pie'), {
+      type: 'doughnut',
+      data: {
+        labels: keys.map(k => `${fmtScore(k)} ★`),
+        datasets: [{ data: keys.map(k => st.distribution[k]), backgroundColor: keys.map(shade), borderColor: c.line, borderWidth: 1 }]
+      },
+      options: { maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+    }));
+  }
+
+  function mix(a, b, t) {
+    const p = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+    const [x, y] = [p(a), p(b)];
+    return '#' + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, '0')).join('');
+  }
+
+  // ── Taster profiles ──
+  function renderTasterProfiles() {
+    const st = results.stats;
+    const panel = $('#res-tasters');
+    if (!st.tasters.length) { panel.innerHTML = ''; return; }
+    const radarOK = typeof window.Chart !== 'undefined' && st.axes.length >= 3;
+
+    panel.innerHTML = `
+      <h2>Tasters</h2>
+      ${radarOK ? `
+        <p class="muted">Each spike shows where someone sits against everyone else in this test, from 0 (least) to 100 (most). Pick up to two to compare.</p>
+        <div class="chips" id="taster-picks" role="group" aria-label="Choose tasters">${st.tasters.map(u =>
+          `<button type="button" class="chip${results.picked.includes(u.userId) ? ' chip--on' : ''}" data-pick="${esc(u.userId)}" aria-pressed="${results.picked.includes(u.userId)}">${esc(u.emoji)} ${esc(u.displayName)}</button>`).join('')}</div>
+        <div class="chart-box chart-box--square"><canvas id="chart-radar" aria-label="Taster profile" role="img"></canvas></div>
+        <dl class="axis-key">${st.axes.map(a => `<div><dt>${a.label}</dt><dd>${AXIS_HELP[a.key]}</dd></div>`).join('')}</dl>` : ''}
+      <div class="table-wrap">
+        <table class="taster-table">
+          <thead><tr><th scope="col">Taster</th><th scope="col">😋 avg</th><th scope="col">🎯 avg</th>${st.hasTiming ? '<th scope="col">Speed</th>' : ''}<th scope="col">Guesses</th></tr></thead>
+          <tbody>${[...st.tasters].sort((a, b) => (b.generosity ?? 0) - (a.generosity ?? 0)).map(u => `
+            <tr>
+              <th scope="row">${esc(u.emoji)} ${esc(u.displayName)}</th>
+              <td>${fmtAvg(u.nice)}</td>
+              <td>${fmtAvg(u.auth)}</td>
+              ${st.hasTiming ? `<td>${Stats.fmtSecs(u.speed)}</td>` : ''}
+              <td>${u.guessMarked ? `${u.guessRight}/${u.guessMarked}` : '–'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+    if (radarOK) drawRadar();
+  }
+
+  const AXIS_HELP = {
+    generosity: 'How high their scores were',
+    speed: 'How quickly they scored',
+    deviation: 'How close they were to everyone else',
+    decisiveness: 'How much of the 1–5 range they used',
+    palate: 'Flavour guesses they got right',
+    words: 'Notes and comments they wrote'
+  };
+
+  function drawRadar() {
+    const st = results.stats;
+    const old = results.charts.find(ch => ch.canvas && ch.canvas.id === 'chart-radar');
+    if (old) { old.destroy(); results.charts = results.charts.filter(ch => ch !== old); }
+    const c = chartColours();
+    const colours = [c.blue, c.red];
+    results.charts.push(new Chart($('#chart-radar'), {
+      type: 'radar',
+      data: {
+        labels: st.axes.map(a => a.label),
+        datasets: results.picked.map((id, i) => {
+          const u = st.tasters.find(x => x.userId === id);
+          return {
+            label: `${u.emoji} ${u.displayName}`,
+            data: st.axes.map(a => st.pct[a.key][id] ?? 0),
+            backgroundColor: colours[i] + '33',
+            borderColor: colours[i],
+            pointBackgroundColor: colours[i],
+            borderWidth: 2
+          };
+        })
+      },
+      options: {
+        maintainAspectRatio: false,
+        scales: { r: { min: 0, max: 100, ticks: { stepSize: 25, backdropColor: 'transparent' }, pointLabels: { font: { size: 13, weight: 'bold' } } } },
+        plugins: { legend: { position: 'bottom' } }
+      }
+    }));
+  }
+
+  $('#res-tasters').addEventListener('click', e => {
+    const b = e.target.closest('[data-pick]');
+    if (!b) return;
+    const id = b.dataset.pick;
+    if (results.picked.includes(id)) {
+      if (results.picked.length === 1) return;
+      results.picked = results.picked.filter(x => x !== id);
+    } else {
+      results.picked = [...results.picked, id].slice(-2);
+    }
+    $('#taster-picks').querySelectorAll('[data-pick]').forEach(x => {
+      const on = results.picked.includes(x.dataset.pick);
+      x.classList.toggle('chip--on', on);
+      x.setAttribute('aria-pressed', on);
+    });
+    drawRadar();
+  });
+
+  // ── Notes ──
+  function cloudHTML(list) {
+    if (!list.length) return '';
+    const max = Math.max(...list.map(x => x.count));
+    const min = Math.min(...list.map(x => x.count));
+    const size = n => (max === min ? 1.15 : 0.95 + ((n - min) / (max - min)) * 1.25);
+    const shuffled = [...list].sort((a, b) => (a.word < b.word ? -1 : 1));
+    return `<p class="cloud">${shuffled.map((x, i) =>
+      `<span style="font-size:${size(x.count).toFixed(2)}rem;color:${PALETTE[i % 4]}" title="${plural(x.count, 'mention')}">${esc(x.word)}</span>`).join(' ')}</p>`;
+  }
+
+  function renderNotes() {
+    const st = results.stats;
+    $('#res-notes').innerHTML = `
+      <h2>Notes of…</h2>
+      ${st.cloud.length ? cloudHTML(st.cloud) : `<p class="empty">${results.data.test.source === 'paper' ? 'Paper tests have no tasting notes.' : 'Nobody wrote any notes this time.'}</p>`}
+      ${st.greatMinds.length ? `
+        <h3 class="org-sub">🧠 Great minds</h3>
+        <p class="muted">Tasted blind, and came up with the same note.</p>
+        <ul class="great-minds">${[...st.greatMinds].sort((a, b) => b.userIds.length - a.userIds.length).slice(0, 8).map(g => `
+          <li><strong>“${esc(g.note)}”</strong> ${esc(listNames(g.userIds.map(userById)))} on ${esc(g.sample.name)}</li>`).join('')}
+        </ul>` : ''}`;
+  }
+
+  function listNames(users) {
+    const names = users.map(u => `${u.emoji} ${u.displayName}`);
+    return names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || '';
   }
 
   // ─── Product library ─────────────────────────────────────────────────────
@@ -1383,7 +1791,8 @@
   let dialogHandler = null;
   let dialogOkLabel = 'Save';
 
-  function openDialog({ title, body, ok, onOk, onOpen, wide }) {
+  function openDialog({ title, body, ok, onOk, onOpen, wide, noCancel }) {
+    $('#dialog-cancel').hidden = !!noCancel;
     $('#dialog-title').textContent = title;
     $('#dialog-body').innerHTML = body;
     $('#dialog-ok').textContent = dialogOkLabel = ok;
@@ -1391,6 +1800,7 @@
     $('#dialog').classList.toggle('dialog--wide', !!wide);
     dialogHandler = onOk;
     $('#dialog').showModal();
+    $('#dialog').scrollTop = 0;
     if (onOpen) onOpen($('#dialog-body'));
   }
 

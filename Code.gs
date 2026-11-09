@@ -4,6 +4,7 @@
  * Phase 2: types, product library, photo uploads to Drive.
  * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
  * Phase 4: live tasting rounds: bowl picking, scoring, notes, guesses, reveal.
+ * Phase 5: results, awards and stats, past tests.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -119,7 +120,11 @@ const ROUTES = {
   noteVocab:          { auth: true,    fn: noteVocab },
   revealSample:       { auth: 'admin', fn: revealSample },
   nextSample:         { auth: 'admin', fn: nextSample },
-  markGuess:          { auth: 'admin', fn: markGuess }
+  markGuess:          { auth: 'admin', fn: markGuess },
+
+  // Phase 5: results and history
+  listPastTests:      { auth: true,    fn: listPastTests },
+  getResults:         { auth: true,    fn: getResults }
 };
 
 function doPost(e) {
@@ -143,7 +148,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return json_({ ok: true, data: { app: 'Taste Test', phase: 4 } });
+  return json_({ ok: true, data: { app: 'Taste Test', phase: 5 } });
 }
 
 // ─── Tasters & login ─────────────────────────────────────────────────────────
@@ -839,6 +844,96 @@ function cleanNotes_(list) {
     if (s && out.indexOf(s) === -1) out.push(s);
   });
   return out.slice(0, 8);
+}
+
+// ─── Results and history ─────────────────────────────────────────────────────
+function listPastTests() {
+  const tests = readTable_('Tests').filter(t => t.status === 'finished');
+  if (!tests.length) return [];
+  const users = userMap_();
+  const products = productMap_();
+  const samples = readTable_('TestProducts');
+  const scores = readTable_('Scores');
+
+  return tests.map(t => {
+    const mine = samples.filter(x => x.testId === t.testId && x.sampleNo !== '');
+    const sc = scores.filter(x => x.testId === t.testId);
+    // Winner = best average niceness + authenticity
+    let best = null;
+    mine.forEach(x => {
+      const rows = sc.filter(y => Number(y.sampleNo) === Number(x.sampleNo));
+      const avg = f => {
+        const v = rows.map(y => y[f]).filter(v => v !== '').map(Number);
+        return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
+      };
+      const total = avg('niceness') + avg('authenticity');
+      if (!best || total > best.total) best = { total, product: products[x.productId] };
+    });
+    const tasters = {};
+    sc.forEach(x => { tasters[x.userId] = true; });
+    return {
+      testId: t.testId, name: String(t.name), testDate: t.testDate, source: t.source || 'live',
+      organiser: users[t.organiserId] || null,
+      sampleCount: mine.length, tasterCount: Object.keys(tasters).length,
+      winner: best && best.product ? {
+        name: String(best.product.name), manufacturer: String(best.product.manufacturer), photoUrl: best.product.photoUrl
+      } : null
+    };
+  }).sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
+}
+
+// Raw material for the results page. The browser works out the stats,
+// so the same code can later combine several tests.
+function getResults(p) {
+  const t = findTest_(p.testId);
+  if (!t) throw err_("That test doesn't exist.");
+  if (t.status !== 'finished') throw err_("That test hasn't finished yet.");
+
+  const users = userMap_();
+  const products = productMap_();
+  const types = {};
+  readTable_('Types').forEach(x => { types[x.typeId] = x; });
+  const num = v => (v === '' || v === null || v === undefined ? null : Number(v));
+
+  const samples = readTable_('TestProducts')
+    .filter(x => x.testId === t.testId && x.sampleNo !== '')
+    .sort((a, b) => Number(a.sampleNo) - Number(b.sampleNo))
+    .map(x => {
+      const pr = products[x.productId] || {};
+      return {
+        sampleNo: Number(x.sampleNo), bowl: String(x.bowl || ''), productId: x.productId,
+        productLine: String(pr.productLine || ''), name: String(pr.name || 'Deleted product'),
+        manufacturer: String(pr.manufacturer || ''), vintage: String(pr.vintage || ''),
+        description: String(pr.description || ''), photoUrl: pr.photoUrl || '',
+        typeIcon: types[pr.typeId] ? types[pr.typeId].icon : '',
+        chosenAt: num(x.chosenAt), revealedAt: num(x.revealedAt)
+      };
+    });
+
+  const scores = readTable_('Scores').filter(x => x.testId === t.testId).map(x => ({
+    sampleNo: Number(x.sampleNo), userId: x.userId,
+    niceness: num(x.niceness), authenticity: num(x.authenticity),
+    guess: String(x.flavourGuess || ''), guessCorrect: x.guessCorrect === '' ? null : isTrue_(x.guessCorrect),
+    comment: String(x.comment || ''), nicenessAt: num(x.nicenessAt), authenticityAt: num(x.authenticityAt)
+  }));
+
+  const notes = readTable_('Notes').filter(x => x.testId === t.testId).map(x => ({
+    sampleNo: Number(x.sampleNo), userId: x.userId, note: String(x.note), phase: x.phase
+  }));
+
+  const ids = {};
+  readTable_('TestParticipants').filter(x => x.testId === t.testId && x.status === 'in').forEach(x => { ids[x.userId] = true; });
+  scores.forEach(x => { ids[x.userId] = true; });
+
+  return {
+    test: {
+      testId: t.testId, name: String(t.name), testDate: t.testDate, source: t.source || 'live',
+      halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
+      keeper: t.keeperId ? users[t.keeperId] || null : null
+    },
+    samples, scores, notes,
+    tasters: Object.keys(ids).map(id => users[id]).filter(Boolean)
+  };
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
