@@ -198,8 +198,10 @@
     $('#home-name').textContent = `Hello, ${state.user.displayName}`;
     $('#admin-panel').hidden = !state.user.isAdmin;
     $('#create-test').hidden = !state.user.isAdmin;
+    $('#create-open').hidden = !state.user.isAdmin;
     if (state.user.isAdmin) loadUsers();
     loadOpenTests(resume);
+    loadOpenTastings();
   }
 
   const fmtDate = d => {
@@ -375,14 +377,14 @@
 
   // Checkbox list of library products, with a search box. Used when creating
   // a test and when changing its products in the lobby.
-  function productPicker(selectedIds) {
+  function productPicker(selectedIds, single = false) {
     if (!state.products.length) {
       return '<p class="muted">Your product library is empty. Add products from the home screen first. You can also add them to this test later.</p>';
     }
     const sel = new Set(selectedIds);
     return `
       <fieldset class="picker">
-        <legend>Products <span class="hint" id="pick-count"></span></legend>
+        <legend>${single ? 'Product' : 'Products'} <span class="hint" id="pick-count"></span></legend>
         <input class="search" type="search" id="pick-search" placeholder="Search products" aria-label="Search products">
         <ul class="pick-list" id="pick-list">
           ${state.products.map(p => {
@@ -394,7 +396,7 @@
             return `
               <li data-hay="${esc(hay)}">
                 <label>
-                  <input type="checkbox" name="productIds" value="${esc(p.productId)}"${sel.has(p.productId) ? ' checked' : ''}>
+                  <input type="${single ? 'radio' : 'checkbox'}" name="${single ? 'productId' : 'productIds'}" value="${esc(p.productId)}"${sel.has(p.productId) ? ' checked' : ''}>
                   <span class="pick__pic">${pic}</span>
                   <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
                 </label>
@@ -409,7 +411,8 @@
     if (!list) return;
     const count = () => {
       const n = list.querySelectorAll('input:checked').length;
-      body.querySelector('#pick-count').textContent = n ? `${n} chosen` : 'None chosen yet';
+      const single = !!list.querySelector('input[type=radio]');
+      body.querySelector('#pick-count').textContent = single ? (n ? '' : 'Pick one') : n ? `${n} chosen` : 'None chosen yet';
     };
     list.addEventListener('change', count);
     body.querySelector('#pick-search').addEventListener('input', e => {
@@ -1071,7 +1074,7 @@
           ? `<img src="${esc(t.winner.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🏆'}</span>
         <span class="history-card__text">
           <strong>${esc(t.name)}</strong>
-          <span>${esc(fmtDate(t.testDate))}${t.source === 'paper' ? ' <span class="badge badge--paper">From paper</span>' : ''}</span>
+          <span>${esc(fmtDate(t.testDate))}${t.source === 'paper' ? ' <span class="badge badge--paper">From paper</span>' : ''}${t.source === 'open' ? ` <span class="badge badge--open">${t.isOpen ? 'Open now' : 'Open tasting'}</span>` : ''}</span>
           <span>${plural(t.sampleCount, 'sample')}, ${plural(t.tasterCount, 'taster')}</span>
           ${t.winner ? `<span class="history-card__win">🏆 ${esc(t.winner.name)}</span>` : ''}
         </span>
@@ -1091,6 +1094,7 @@
     if (results.from === 'live' && lobby.testId) return openLobby(lobby.testId);
     if (results.from === 'history') return goHistory();
     if (results.from === 'reviews') return goReviews();
+    if (results.from === 'open' && openT.testId) return openOpenTasting(openT.testId);
     goHome();
   });
 
@@ -1124,7 +1128,7 @@
   function renderResults() {
     const { data, stats } = results;
     const t = data.test;
-    $('#res-eyebrow').textContent = t.source === 'paper' ? 'From paper' : 'Results';
+    $('#res-eyebrow').textContent = t.source === 'paper' ? 'From paper' : t.source === 'open' ? (t.isOpen ? 'Open tasting, still open' : 'Open tasting') : 'Results';
     $('#res-title').textContent = t.name;
     $('#res-meta').textContent = `${fmtDate(t.testDate)}. ${plural(stats.samples.length, 'sample')}, ${plural(stats.tasters.length, 'taster')}` +
       (t.organiser ? `. Run by ${t.organiser.emoji} ${t.organiser.displayName}` : '') + '.';
@@ -1613,7 +1617,7 @@
         <h3 class="org-sub">Tasted in</h3>
         <ul class="appearances">${p.appearances.map(a => `
           <li>
-            <span><strong>${esc(a.testName)}</strong><span class="muted">${esc(fmtDate(a.testDate))}${a.source === 'paper' ? ', from paper' : ''}</span></span>
+            <span><strong>${esc(a.testName)}</strong><span class="muted">${esc(fmtDate(a.testDate))}${a.source === 'paper' ? ', from paper' : a.source === 'open' ? ', open tasting' : ''}</span></span>
             <span class="appearances__scores">😋 ${fmtAvg(a.nice)} 🎯 ${fmtAvg(a.auth)}</span>
             <button type="button" class="link" data-open-test="${esc(a.testId)}">Results</button>
           </li>`).join('')}
@@ -1715,6 +1719,300 @@
     });
   }
 
+  // ─── Open tastings ───────────────────────────────────────────────────────
+  const openT = { testId: null, data: null, nice: null, auth: null, notes: [] };
+
+  async function loadOpenTastings() {
+    let list;
+    try {
+      list = await Api.call('listOpenTastings');
+    } catch (e) {
+      return;
+    }
+    if ($('#screen-home').hidden) return;
+    $('#open-tastings-wrap').hidden = !list.length;
+    $('#open-tastings').innerHTML = list.map(t => `
+      <div class="test-card test-card--open">
+        <span class="test-card__pic">${t.product && t.product.photoUrl ? `<img src="${esc(t.product.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🍽️'}</span>
+        <div class="test-card__info">
+          <p class="test-card__name">${esc(t.name)}</p>
+          <p class="test-card__meta">${t.ratings ? `${plural(t.ratings, 'rating')}: 😋 ${fmtAvg(t.nice)} 🎯 ${fmtAvg(t.auth)}` : 'No ratings yet'}</p>
+          ${t.mine ? `<p class="test-card__meta">You: 😋 ${fmtScore(t.mine.nice)} 🎯 ${fmtScore(t.mine.auth)}</p>` : ''}
+        </div>
+        <button class="btn${t.mine ? ' btn--light' : ''}" type="button" data-open-tasting="${esc(t.testId)}">${t.mine ? 'View' : 'Rate it'}</button>
+      </div>`).join('');
+  }
+
+  $('#open-tastings').addEventListener('click', e => {
+    const b = e.target.closest('[data-open-tasting]');
+    if (b) openOpenTasting(b.dataset.openTasting);
+  });
+  $('#open-back').addEventListener('click', () => goHome());
+
+  // Creating one (admins)
+  $('#create-open').addEventListener('click', async () => {
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      return toast(e.message);
+    }
+    openCreateOpen(null);
+  });
+
+  function openCreateOpen(preselectId) {
+    const today = new Date();
+    const iso = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const pre = preselectId ? state.products.find(p => p.productId === preselectId) : null;
+    const suggest = p => `${p.manufacturer} ${p.name}`.trim();
+
+    openDialog({
+      title: 'Start an open tasting',
+      ok: 'Start it',
+      wide: true,
+      body: `
+        <p class="muted">One known product that anyone can score, whenever they get round to it. It stays open until you close it.</p>
+        <label>Name<input name="name" maxlength="60" value="${esc(pre ? suggest(pre) : '')}" placeholder="Mr Kipling Mince Pies"></label>
+        <label>Started on<input name="testDate" type="date" value="${iso}"></label>
+        <label class="check"><input type="checkbox" name="halfPoints" checked> Allow half points</label>
+        ${productPicker(preselectId ? [preselectId] : [], true)}
+        <button type="button" class="link" id="open-new-product">Not in the library? Add a new product</button>`,
+      onOpen: body => {
+        wirePicker(body);
+        const nameI = body.querySelector('[name=name]');
+        let typed = !!pre;
+        nameI.addEventListener('input', () => { typed = true; });
+        const list = body.querySelector('#pick-list');
+        if (list) list.addEventListener('change', e => {
+          const p = state.products.find(x => x.productId === e.target.value);
+          if (p && (!typed || !nameI.value.trim())) { nameI.value = suggest(p); typed = false; }
+        });
+        body.querySelector('#open-new-product').addEventListener('click', () => {
+          openProduct(null, async saved => {
+            try { state.products = await Api.call('listProducts'); } catch (e) { /* keep what we have */ }
+            openCreateOpen(saved.productId);
+          });
+        });
+      },
+      onOk: async f => {
+        if (!f.get('productId')) throw new Error('Pick a product.');
+        if (!String(f.get('name') || '').trim()) throw new Error('Give it a name.');
+        const r = await Api.call('createOpenTasting', {
+          name: f.get('name'), testDate: f.get('testDate'),
+          halfPoints: f.get('halfPoints') === 'on', productId: f.get('productId')
+        });
+        toast('Open tasting started. Everyone can rate it now');
+        openOpenTasting(r.testId);
+      }
+    });
+  }
+
+  // The tasting page
+  async function openOpenTasting(testId) {
+    show('screen-open');
+    openT.testId = testId;
+    $('#open-name').textContent = 'Loading…';
+    ['open-product', 'open-form', 'open-scores', 'open-admin'].forEach(id => { $('#' + id).hidden = true; });
+    let d;
+    try {
+      d = await Api.call('getOpenTasting', { testId });
+    } catch (e) {
+      $('#open-name').textContent = 'Oops';
+      $('#open-meta').textContent = e.message;
+      return;
+    }
+    openT.data = d;
+    openT.nice = d.mine ? d.mine.niceness : null;
+    openT.auth = d.mine ? d.mine.authenticity : null;
+    openT.notes = d.mine ? [...d.mine.notes] : [];
+    renderOpenTasting();
+  }
+
+  function renderOpenTasting() {
+    const d = openT.data;
+    const pr = d.product || { name: 'Deleted product', manufacturer: '', vintage: '', description: '', photoUrl: '', typeIcon: '' };
+    const avg = f => {
+      const v = d.scores.map(x => x[f]).filter(x => x != null);
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+
+    $('#open-status').textContent = d.isOpen ? 'Open tasting' : 'Closed';
+    $('#open-name').textContent = d.name;
+    $('#open-meta').textContent = `Started ${fmtDate(d.testDate)}${d.organiser ? ' by ' + nameOf(d.organiser) : ''}. ${d.scores.length ? plural(d.scores.length, 'rating') + ' so far' : 'Nobody has rated it yet'}.`;
+
+    const pp = $('#open-product');
+    pp.hidden = false;
+    pp.innerHTML = `
+      <div class="reveal__pic">${pr.photoUrl ? `<img src="${esc(pr.photoUrl)}" alt="" referrerpolicy="no-referrer">` : `<span>${esc(pr.typeIcon || '🍽️')}</span>`}</div>
+      <div class="reveal__text">
+        <h2>${esc(pr.name)}</h2>
+        <p class="muted">${esc(pr.manufacturer)}${pr.vintage ? ', ' + esc(pr.vintage) : ''}</p>
+        ${pr.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(pr.description)}</p>` : ''}
+      </div>`;
+
+    // My scores
+    const fp = $('#open-form');
+    fp.hidden = !d.isOpen && !d.mine;
+    if (d.isOpen) {
+      fp.innerHTML = `
+        <h2>${d.mine ? 'Your scores' : 'Rate it'}</h2>
+        <h3 class="org-sub">😋 How nice is it?</h3>
+        <div class="stars" data-group="nice"></div>
+        <p class="star-label" data-label="nice"></p>
+        <h3 class="org-sub">🎯 Does it taste like the packet says?</h3>
+        <div class="stars" data-group="auth"></div>
+        <p class="star-label" data-label="auth"></p>
+
+        <div class="notes-field">
+          <label for="open-note-input">Notes of… <span class="hint">What can you taste? Silly is good.</span></label>
+          <div class="note-chips-edit" id="open-note-chips"></div>
+          <div class="note-add">
+            <input id="open-note-input" list="open-note-vocab" maxlength="40" autocomplete="off" placeholder="e.g. Christmas morning">
+            <button type="button" class="btn btn--ghost btn--small" id="open-note-add">Add</button>
+          </div>
+          <button type="button" class="link" id="open-note-inspire">✨ Inspire me</button>
+          <datalist id="open-note-vocab"></datalist>
+        </div>
+        <label>Comment<textarea id="open-comment" rows="2" maxlength="500" placeholder="Optional">${esc(d.mine ? d.mine.comment : '')}</textarea></label>
+        <button class="btn btn--wide" type="button" id="open-send">${d.mine ? 'Update my scores' : 'Send my scores'}</button>
+        <p class="sent" id="open-sent" role="status">${d.mine ? '✓ Saved. You can change it while the tasting is open.' : ''}</p>`;
+      renderOpenStars('nice');
+      renderOpenStars('auth');
+      renderOpenChips();
+      if (live.vocab) fillOpenVocab();
+      else Api.call('noteVocab').then(v => { live.vocab = v; fillOpenVocab(); }).catch(() => {});
+    } else if (d.mine) {
+      fp.innerHTML = `<h2>Your scores</h2><p class="detail-head__scores">😋 ${fmtScore(d.mine.niceness)} &nbsp; 🎯 ${fmtScore(d.mine.authenticity)}</p>
+        ${d.mine.comment ? `<p class="muted">“${esc(d.mine.comment)}”</p>` : ''}`;
+    }
+
+    // Everyone's scores
+    const sp = $('#open-scores');
+    sp.hidden = !d.scores.length;
+    const cloud = Object.keys(d.notes).map(word => ({ word, count: d.notes[word] })).sort((a, b) => b.count - a.count).slice(0, 30);
+    sp.innerHTML = d.scores.length ? `
+      <div class="panel__head"><h2>Everyone's scores</h2><span class="muted">${plural(d.scores.length, 'rating')}</span></div>
+      <p class="detail-head__scores">😋 ${fmtAvg(avg('niceness'))} &nbsp; 🎯 ${fmtAvg(avg('authenticity'))}</p>
+      <ul class="detail-scores">${d.scores.map(r => `
+        <li>
+          <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}${r.isMe ? ' (you)' : ''}</span>
+          <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+          ${r.at ? `<span class="detail-scores__extra">${esc(fmtDate(new Date(r.at).toISOString().slice(0, 10)))}</span>` : ''}
+          ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
+        </li>`).join('')}
+      </ul>
+      ${cloud.length ? `<h3 class="org-sub">Notes of…</h3>${cloudHTML(cloud)}` : ''}
+      <button class="btn btn--ghost btn--wide" type="button" id="open-results">Full results and stats</button>` : '';
+
+    // Admin controls
+    const ap = $('#open-admin');
+    ap.hidden = !state.user.isAdmin;
+    ap.innerHTML = d.isOpen
+      ? '<h2>Admin</h2><p class="muted">Close the tasting once everyone has had a go. You can reopen it later.</p><button class="btn btn--ghost" type="button" data-open-set="close">Close tasting</button>'
+      : '<h2>Admin</h2><p class="muted">This tasting is closed, so nobody can add scores.</p><button class="btn btn--ghost" type="button" data-open-set="open">Reopen tasting</button>';
+  }
+
+  function renderOpenStars(group) {
+    const half = openT.data.halfPoints;
+    const value = openT[group];
+    const labels = group === 'nice' ? NICE_LABELS : AUTH_LABELS;
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
+      const fill = value >= i ? 100 : value >= i - 0.5 ? 50 : 0;
+      const hits = half
+        ? `<button type="button" class="star__hit star__hit--l" data-g="${group}" data-v="${i - 0.5}" aria-label="${fmtScore(i - 0.5)} stars"></button>
+           <button type="button" class="star__hit star__hit--r" data-g="${group}" data-v="${i}" aria-label="${i} stars"></button>`
+        : `<button type="button" class="star__hit" data-g="${group}" data-v="${i}" aria-label="${plural(i, 'star')}"></button>`;
+      html += `<span class="star" style="--fill:${fill}%"><span class="star__glyph" aria-hidden="true">★</span>${hits}</span>`;
+    }
+    $(`#open-form [data-group="${group}"]`).innerHTML = html;
+    $(`#open-form [data-label="${group}"]`).textContent = value
+      ? `${fmtScore(value)} ${value > 1 ? 'stars' : 'star'}: ${labelFor(value, labels)}` : 'Tap the stars';
+  }
+
+  function renderOpenChips() {
+    $('#open-note-chips').innerHTML = openT.notes.map(n =>
+      `<span class="note-chip">${esc(n)}<button type="button" data-open-note-remove="${esc(n)}" aria-label="Remove ${esc(n)}">×</button></span>`).join('');
+  }
+
+  function fillOpenVocab() {
+    const dl = $('#open-note-vocab');
+    if (dl) dl.innerHTML = (live.vocab || []).map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  function addOpenNote(raw) {
+    const n = String(raw || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+    if (!n) return;
+    if (openT.notes.length >= 8) return toast("That's plenty of notes!");
+    if (!openT.notes.includes(n)) openT.notes.push(n);
+    renderOpenChips();
+  }
+
+  $('#screen-open').addEventListener('click', async e => {
+    const star = e.target.closest('[data-g]');
+    if (star) {
+      openT[star.dataset.g] = Number(star.dataset.v);
+      return renderOpenStars(star.dataset.g);
+    }
+    const rm = e.target.closest('[data-open-note-remove]');
+    if (rm) {
+      openT.notes = openT.notes.filter(n => n !== rm.dataset.openNoteRemove);
+      return renderOpenChips();
+    }
+    if (e.target.closest('#open-note-add')) {
+      addOpenNote($('#open-note-input').value);
+      $('#open-note-input').value = '';
+      return;
+    }
+    if (e.target.closest('#open-note-inspire')) {
+      const pool = INSPIRATION.filter(n => !openT.notes.includes(n));
+      $('#open-note-input').value = pool[Math.floor(Math.random() * pool.length)] || '';
+      return $('#open-note-input').focus();
+    }
+    if (e.target.closest('#open-results')) return openResults(openT.testId, 'open');
+
+    const set = e.target.closest('[data-open-set]');
+    if (set) {
+      const opening = set.dataset.openSet === 'open';
+      if (!opening && !confirm('Close this tasting? Nobody will be able to add or change scores.')) return;
+      try {
+        await Api.call('setOpenTasting', { testId: openT.testId, open: opening });
+        toast(opening ? 'Tasting reopened' : 'Tasting closed');
+        openOpenTasting(openT.testId);
+      } catch (x) { toast(x.message); }
+      return;
+    }
+
+    if (e.target.closest('#open-send')) {
+      if (!openT.nice || !openT.auth) return toast('Give it both scores first');
+      const pending = $('#open-note-input').value;
+      if (pending.trim()) { addOpenNote(pending); $('#open-note-input').value = ''; }
+      const btn = $('#open-send');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        await Api.call('submitOpenScore', {
+          testId: openT.testId, niceness: openT.nice, authenticity: openT.auth,
+          comment: $('#open-comment').value, notes: openT.notes
+        });
+        toast('Scores saved');
+        live.vocab = null;
+        openOpenTasting(openT.testId);
+      } catch (x) {
+        toast(x.message);
+        btn.disabled = false;
+        btn.textContent = 'Send my scores';
+      }
+    }
+  });
+
+  $('#screen-open').addEventListener('keydown', e => {
+    if (e.target.id === 'open-note-input' && (e.key === 'Enter' || e.key === ',')) {
+      e.preventDefault();
+      addOpenNote(e.target.value);
+      e.target.value = '';
+    }
+  });
+
   // ─── Product library ─────────────────────────────────────────────────────
   Object.assign(state, { types: [], products: [], filter: 'all', search: '' });
   let pendingPhoto = null;
@@ -1794,7 +2092,7 @@
     if (b) openProduct(state.products.find(p => p.productId === b.dataset.id));
   });
 
-  function openProduct(p) {
+  function openProduct(p, afterSave) {
     if (!state.types.length) return toast('Add a type first, like Crisps');
     pendingPhoto = null;
     const v = p || {
@@ -1913,7 +2211,8 @@
 
         const saved = await Api.call('saveProduct', data);
         toast(p ? 'Changes saved' : `${saved.name} added`);
-        goProducts();
+        if (afterSave) afterSave(saved);
+        else goProducts();
       }
     });
   }

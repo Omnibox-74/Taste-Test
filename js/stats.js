@@ -123,7 +123,7 @@ window.Stats = (() => {
     const t = (icon, title, u, detail) => u && awards.push({ icon, title, kind: 'taster', taster: u, detail });
     const f1 = v => Number(v).toFixed(1);
 
-    if (scored.length) {
+    if (scored.length >= 2) {   // product awards need something to beat
       const champ = best(scored, 'total');
       p('🏆', 'Champion', champ, `Top overall with ${f1(champ.nice)} niceness and ${f1(champ.auth)} authenticity`);
       const tasty = best(scored, 'nice');
@@ -177,7 +177,7 @@ window.Stats = (() => {
     const greatMinds = [];
     samples.forEach(s => {
       const byNote = {};
-      s.notes.filter(n => n.phase !== 'revealed').forEach(n => {
+      s.notes.filter(n => n.phase === 'blind').forEach(n => {
         (byNote[n.note] = byNote[n.note] || new Set()).add(n.userId);
       });
       Object.keys(byNote).forEach(note => {

@@ -87,8 +87,13 @@
       <p class="hello"><span id="home-emoji"></span> <span id="home-name"></span></p>
       <h2>Tests to join</h2>
       <div class="test-list" id="open-tests"><p class="loading">Looking for tests…</p></div>
+      <div id="open-tastings-wrap" hidden>
+        <h2 class="home-sub">Open tastings</h2>
+        <div class="test-list" id="open-tastings"></div>
+      </div>
       <div class="row">
         <button class="btn" type="button" id="create-test" hidden>Create a test</button>
+        <button class="btn" type="button" id="create-open" hidden>Start an open tasting</button>
         <button class="btn btn--light" type="button" id="open-reviews">🔎 Reviews</button>
         <button class="btn btn--light" type="button" id="open-history">Past tests</button>
         <button class="btn btn--ghost" type="button" id="change-pin">Change my PIN</button>
@@ -156,6 +161,22 @@
     <section class="panel" id="score-panel" hidden></section>
     <section class="panel" id="status-panel" hidden></section>
     <section class="panel" id="sofar-panel" hidden></section>
+  </section>
+
+  <section class="screen" id="screen-open" hidden>
+    <header class="topbar">
+      <button class="link" type="button" id="open-back">Home</button>
+      <span class="brand brand--small">Taste Test</span>
+    </header>
+    <div class="packet packet--green packet--slim">
+      <p class="eyebrow" id="open-status"></p>
+      <h1 class="screen-title" id="open-name">Loading…</h1>
+      <p class="lobby-meta" id="open-meta"></p>
+    </div>
+    <section class="panel reveal" id="open-product" hidden></section>
+    <section class="panel" id="open-form" hidden></section>
+    <section class="panel" id="open-scores" hidden></section>
+    <section class="panel" id="open-admin" hidden></section>
   </section>
 
   <section class="screen" id="screen-reviews" hidden>

@@ -5,6 +5,7 @@
  * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
  * Phase 4: live tasting rounds: bowl picking, scoring, notes, guesses, reveal.
  * Phase 5: results, awards and stats, past tests, product reviews.
+ * Open tastings: one known product, scored by anyone, whenever they like.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -126,7 +127,14 @@ const ROUTES = {
   listPastTests:      { auth: true,    fn: listPastTests },
   getResults:         { auth: true,    fn: getResults },
   listReviews:        { auth: true,    fn: listReviews },
-  getProductReview:   { auth: true,    fn: getProductReview }
+  getProductReview:   { auth: true,    fn: getProductReview },
+
+  // Open tastings
+  listOpenTastings:   { auth: true,    fn: listOpenTastings },
+  getOpenTasting:     { auth: true,    fn: getOpenTasting },
+  submitOpenScore:    { auth: true,    fn: submitOpenScore },
+  createOpenTasting:  { auth: 'admin', fn: createOpenTasting },
+  setOpenTasting:     { auth: 'admin', fn: setOpenTasting }
 };
 
 function doPost(e) {
@@ -850,7 +858,7 @@ function cleanNotes_(list) {
 
 // ─── Results and history ─────────────────────────────────────────────────────
 function listPastTests() {
-  const tests = readTable_('Tests').filter(t => t.status === 'finished');
+  const tests = readTable_('Tests').filter(t => t.status === 'finished' || t.status === 'open');
   if (!tests.length) return [];
   const users = userMap_();
   const products = productMap_();
@@ -875,6 +883,7 @@ function listPastTests() {
     sc.forEach(x => { tasters[x.userId] = true; });
     return {
       testId: t.testId, name: String(t.name), testDate: t.testDate, source: t.source || 'live',
+      isOpen: t.status === 'open',
       organiser: users[t.organiserId] || null,
       sampleCount: mine.length, tasterCount: Object.keys(tasters).length,
       winner: best && best.product ? {
@@ -889,7 +898,7 @@ function listPastTests() {
 function getResults(p) {
   const t = findTest_(p.testId);
   if (!t) throw err_("That test doesn't exist.");
-  if (t.status !== 'finished') throw err_("That test hasn't finished yet.");
+  if (t.status !== 'finished' && t.status !== 'open') throw err_("That test hasn't finished yet.");
 
   const users = userMap_();
   const products = productMap_();
@@ -930,7 +939,7 @@ function getResults(p) {
   return {
     test: {
       testId: t.testId, name: String(t.name), testDate: t.testDate, source: t.source || 'live',
-      halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
+      isOpen: t.status === 'open', halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
       keeper: t.keeperId ? users[t.keeperId] || null : null
     },
     samples, scores, notes,
@@ -941,7 +950,7 @@ function getResults(p) {
 // ─── Reviews: every product that's been through a finished test ─────────────
 function reviewData_() {
   const finished = {};
-  readTable_('Tests').filter(t => t.status === 'finished').forEach(t => { finished[t.testId] = t; });
+  readTable_('Tests').filter(t => t.status === 'finished' || t.status === 'open').forEach(t => { finished[t.testId] = t; });
   const samples = readTable_('TestProducts').filter(x => finished[x.testId] && x.sampleNo !== '');
   const scores = readTable_('Scores').filter(x => finished[x.testId]);
   return { finished, samples, scores };
@@ -1018,6 +1027,129 @@ function getProductReview(p) {
   });
   out.scores.sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
   return out;
+}
+
+// ─── Open tastings ───────────────────────────────────────────────────────────
+// A test with one known product and status 'open'. Anyone can score it, any
+// time, until it's closed. It shows in results, past tests and reviews like any test.
+
+function createOpenTasting(p, user) {
+  const name = cleanText_(p.name, 'name', 60, true);
+  return withLock_(() => {
+    const ids = checkProductIds_([p.productId]);
+    if (ids.length !== 1) throw err_('Pick a product.');
+    const now = Date.now();
+    const test = {
+      testId: newId_('X'), name, testDate: /^\d{4}-\d{2}-\d{2}$/.test(p.testDate) ? p.testDate : today_(),
+      organiserId: user.userId, status: 'open', halfPoints: !!p.halfPoints,
+      currentSample: 1, phase: 'open', phaseOpenedAt: now, version: now, created: now,
+      source: 'open', startedAt: now, finishedAt: '', keeperId: '', bowlsReady: false
+    };
+    appendRow_('Tests', test);
+    appendRow_('TestProducts', { testId: test.testId, sampleNo: 1, productId: ids[0], order: 1, bowl: '', chosenAt: '', revealedAt: '', closedAt: '' });
+    return { testId: test.testId };
+  });
+}
+
+function listOpenTastings(p, user) {
+  const tests = readTable_('Tests').filter(t => t.status === 'open');
+  if (!tests.length) return [];
+  const products = productMap_();
+  const samples = readTable_('TestProducts');
+  const scores = readTable_('Scores');
+  return tests.map(t => {
+    const row = samples.find(x => x.testId === t.testId);
+    const pr = row ? products[row.productId] : null;
+    const sc = scores.filter(x => x.testId === t.testId);
+    const avg = f => {
+      const v = sc.map(x => x[f]).filter(v => v !== '').map(Number);
+      return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100) / 100 : null;
+    };
+    const mine = sc.find(x => x.userId === user.userId);
+    return {
+      testId: t.testId, name: String(t.name), testDate: t.testDate,
+      product: pr ? { name: String(pr.name), manufacturer: String(pr.manufacturer), vintage: String(pr.vintage), photoUrl: pr.photoUrl } : null,
+      ratings: sc.length, nice: avg('niceness'), auth: avg('authenticity'),
+      mine: mine ? { nice: mine.niceness === '' ? null : Number(mine.niceness), auth: mine.authenticity === '' ? null : Number(mine.authenticity) } : null
+    };
+  }).sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
+}
+
+function getOpenTasting(p, user) {
+  const t = findTest_(p.testId);
+  if (!t || t.source !== 'open') throw err_("That tasting doesn't exist.");
+  const row = readTable_('TestProducts').find(x => x.testId === t.testId);
+  const pr = row ? productMap_()[row.productId] : null;
+  const types = {};
+  readTable_('Types').forEach(x => { types[x.typeId] = x; });
+  const users = userMap_();
+  const num = v => (v === '' ? null : Number(v));
+  const scores = readTable_('Scores').filter(x => x.testId === t.testId);
+  const notes = readTable_('Notes').filter(x => x.testId === t.testId);
+  const mine = scores.find(x => x.userId === user.userId);
+  const counts = {};
+  notes.forEach(n => { counts[n.note] = (counts[n.note] || 0) + 1; });
+
+  return {
+    testId: t.testId, name: String(t.name), testDate: t.testDate, isOpen: t.status === 'open',
+    halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
+    product: pr ? {
+      productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer), vintage: String(pr.vintage),
+      description: String(pr.description || ''), photoUrl: pr.photoUrl, typeIcon: types[pr.typeId] ? types[pr.typeId].icon : ''
+    } : null,
+    mine: mine ? {
+      niceness: num(mine.niceness), authenticity: num(mine.authenticity), comment: String(mine.comment || ''),
+      notes: notes.filter(n => n.userId === user.userId).map(n => String(n.note))
+    } : null,
+    scores: scores
+      .sort((a, b) => Number(b.nicenessAt || 0) - Number(a.nicenessAt || 0))
+      .map(x => ({
+        user: users[x.userId] || { emoji: '👤', displayName: 'Someone' }, isMe: x.userId === user.userId,
+        niceness: num(x.niceness), authenticity: num(x.authenticity), comment: String(x.comment || ''),
+        at: num(x.nicenessAt)
+      })),
+    notes: counts
+  };
+}
+
+function submitOpenScore(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.source !== 'open') throw err_("That tasting doesn't exist.");
+    if (t.status !== 'open') throw err_('This tasting has been closed.');
+    const half = isTrue_(t.halfPoints);
+    const niceness = cleanScore_(p.niceness, half);
+    const authenticity = cleanScore_(p.authenticity, half);
+    const comment = cleanText_(p.comment, 'comment', 500, false);
+    const now = Date.now();
+
+    const existing = readTable_('Scores').find(x => x.testId === t.testId && x.userId === user.userId);
+    if (existing) {
+      updateRow_('Scores', existing._row, { niceness, authenticity, comment });
+    } else {
+      appendRow_('Scores', {
+        testId: t.testId, sampleNo: 1, userId: user.userId, niceness, authenticity,
+        flavourGuess: '', guessCorrect: '', comment, phaseOpenedAt: '', nicenessAt: now, authenticityAt: now
+      });
+    }
+    const notes = cleanNotes_(p.notes);
+    deleteWhere_('Notes', x => x.testId === t.testId && x.userId === user.userId);
+    appendRows_('Notes', notes.map(n => ({ testId: t.testId, sampleNo: 1, userId: user.userId, note: n, phase: 'open', created: now })));
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function setOpenTasting(p) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.source !== 'open') throw err_("That tasting doesn't exist.");
+    const now = Date.now();
+    updateRow_('Tests', t._row, p.open
+      ? { status: 'open', finishedAt: '', version: now }
+      : { status: 'finished', finishedAt: now, version: now });
+    return true;
+  });
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
