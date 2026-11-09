@@ -437,13 +437,15 @@
     refreshLobby();
   }
 
+  const onTestScreen = () => !$('#screen-lobby').hidden || !$('#screen-live').hidden;
+
   async function refreshLobby(force = false) {
     clearTimeout(timers.lobby);
-    if ($('#screen-lobby').hidden || !lobby.testId) return;
+    if (!onTestScreen() || !lobby.testId) return;
     if (force) lobby.version = null;
     try {
       const s = await Api.call('getTest', { testId: lobby.testId, since: lobby.version });
-      if ($('#screen-lobby').hidden) return;
+      if (!onTestScreen()) return;
       if (!s.unchanged) {
         lobby.version = s.version;
         if (renderLobby(s) === false) return;
@@ -452,7 +454,8 @@
       if (e.code === 'AUTH') return;
       toast(e.message);
     }
-    if (!$('#screen-lobby').hidden) {
+    const finished = lobby.test && lobby.test.status === 'finished';
+    if (onTestScreen() && !finished) {
       timers.lobby = setTimeout(refreshLobby, document.hidden ? 10000 : 2500);
     }
   }
@@ -465,6 +468,10 @@
       toast(s.isOrganiser ? 'Test cancelled' : 'The organiser cancelled this test');
       goHome();
       return false;
+    }
+    if (s.status === 'live' || s.status === 'finished') {
+      renderLive(s);
+      return true;
     }
     if (lobby.wasIn && !s.amIn && !s.isOrganiser) {
       toast("You've been taken out of this test");
@@ -525,6 +532,7 @@
   }
 
   $('#lobby-home').addEventListener('click', () => goHome());
+  $('#live-home').addEventListener('click', () => goHome());
 
   $('#lobby-actions').addEventListener('click', async e => {
     const b = e.target.closest('button[data-act]');
@@ -689,6 +697,352 @@
         refreshLobby(true);
       }
     });
+  }
+
+  // ─── Live tasting ────────────────────────────────────────────────────────
+  const NICE_LABELS = ['Never again', 'Not for me', "It's fine", 'Really good', 'I want the whole bag'];
+  const AUTH_LABELS = ['Nothing like it', 'A faint hint', 'Getting there', 'Very close', 'Exactly as promised'];
+  const INSPIRATION = [
+    'summer rain', 'a damp tent', "grandma's handbag", 'a hint of regret', 'wet dog', 'bonfire night',
+    'the seaside', 'cardboard', 'old pennies', 'christmas morning', 'school dinners', 'burnt toast',
+    'freshly cut grass', 'a cinema floor', 'the fairground', 'a new car', 'pencil shavings', 'a campfire',
+    'a sock drawer', 'chip shop vinegar', 'sunday roast', 'birthday cake', 'a library', 'a garden centre café',
+    'a petrol station', 'the 1980s', 'disappointment', 'pure joy', 'a wet tuesday', 'pocket fluff',
+    'a ploughman’s lunch', 'smugness', 'a farmyard', 'a bouncy castle', 'nan’s sideboard'
+  ];
+  const live = { key: null, form: null, vocab: null };
+
+  const fmtScore = v => (v == null ? '–' : (Math.floor(v) || '') + (v % 1 ? '½' : ''));
+  const fmtAvg = v => (v == null ? '–' : Number(v).toFixed(1));
+  const labelFor = (v, L) => v % 1
+    ? (v < 1 ? L[0] : `${L[Math.floor(v) - 1]} / ${L[Math.ceil(v) - 1]}`)
+    : L[v - 1];
+  const nameOf = u => (u ? `${u.emoji} ${u.displayName}` : 'someone');
+
+  function renderLive(s) {
+    if ($('#screen-live').hidden) {
+      show('screen-live');
+      live.key = null;
+    }
+    lobby.test = s;
+    const finished = s.status === 'finished';
+    const phase = finished ? 'done' : s.phase;
+    const key = `${s.current}:${phase}`;
+    const changed = key !== live.key;
+    live.key = key;
+
+    // Header
+    $('#live-head').className = 'packet live-head packet--' +
+      ({ choose: 'blue', niceness: 'red', authenticity: 'green', done: 'blue' }[phase] || 'blue');
+    $('#live-testname').textContent = s.name;
+    $('#live-stage').textContent = { choose: 'Next sample on its way', niceness: 'Tasting blind', authenticity: 'Revealed!', done: 'All done' }[phase] || '';
+    $('#live-sample').textContent = finished ? "That's a wrap!" : `Sample ${s.current}`;
+    $('#live-sub').textContent = finished
+      ? `${plural(s.sampleTotal, 'sample')} tasted. Here's how they did.`
+      : `${s.current} of ${s.sampleTotal}. ` + {
+          choose: `Waiting for ${nameOf(s.keeper)} to bring it out.`,
+          niceness: 'Score it before you know what it is.',
+          authenticity: 'Now, does it taste like the packet says?'
+        }[phase];
+
+    // Keeper picks a bowl
+    const kp = $('#keeper-panel');
+    kp.hidden = !(phase === 'choose' && s.isKeeper && s.bowlsLeft);
+    if (!kp.hidden && changed) {
+      kp.innerHTML = `
+        <h2>🥣 Pick a bowl</h2>
+        <p class="muted">Any bowl you like. Carry it out with the letter still hidden underneath.</p>
+        <div class="bowl-grid">${s.bowlsLeft.map(b => `<button type="button" class="bowl-btn" data-bowl="${esc(b)}">${esc(b)}</button>`).join('')}</div>`;
+    }
+
+    // The reveal
+    const rp = $('#reveal-panel');
+    rp.hidden = !(phase === 'authenticity' && s.reveal);
+    if (!rp.hidden && changed) {
+      const r = s.reveal;
+      rp.innerHTML = `
+        <div class="reveal__pic">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" referrerpolicy="no-referrer">` : `<span>${esc(r.typeIcon || '🍽️')}</span>`}</div>
+        <div class="reveal__text">
+          <p class="kicker">Sample ${s.current} was…</p>
+          <h2>${esc(r.name)}</h2>
+          <p class="muted">${esc(r.manufacturer)}${r.vintage ? ', ' + esc(r.vintage) : ''}</p>
+          ${r.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(r.description)}</p>` : ''}
+        </div>`;
+    }
+
+    // My scoring form
+    const sp = $('#score-panel');
+    const scoring = !finished && s.amIn && (phase === 'niceness' || phase === 'authenticity');
+    const waiting = !finished && s.amIn && phase === 'choose' && !s.isKeeper;
+    sp.hidden = !(scoring || waiting);
+    if (changed) {
+      if (scoring) buildScoreForm(s);
+      else if (waiting) sp.innerHTML = `<p class="waiting">🥣 Waiting for ${esc(nameOf(s.keeper))} to bring out the next sample…</p>`;
+    }
+
+    renderStatus(s, phase);
+    renderSoFar(s, finished);
+  }
+
+  // ── Scoring form ──
+  function buildScoreForm(s) {
+    const nice = s.phase === 'niceness';
+    const m = s.mine;
+    const field = nice ? 'niceness' : 'authenticity';
+    live.form = {
+      field, half: s.halfPoints, value: m[field],
+      labels: nice ? NICE_LABELS : AUTH_LABELS,
+      notes: [...(nice ? m.notesBlind : m.notesRevealed)]
+    };
+    $('#score-panel').innerHTML = `
+      <h2>${nice ? '😋 How nice is it?' : '🎯 How true is it?'}</h2>
+      <p class="muted">${nice ? "Just how much you like it. Forget what it's meant to be." : "Does it taste like the packet says? Whether you like it doesn't matter now."}</p>
+      ${!nice && m.niceness != null ? `<p class="your-nice">You gave it ${fmtScore(m.niceness)} for niceness.</p>` : ''}
+      <div class="stars" id="stars" role="group" aria-label="${nice ? 'Niceness' : 'Authenticity'} score"></div>
+      <p class="star-label" id="star-label"></p>
+
+      <div class="notes-field">
+        <label for="note-input">Notes of… <span class="hint">${nice ? 'What can you taste? Silly is good.' : 'Anything else, now you know?'}</span></label>
+        <div class="note-chips-edit" id="note-chips"></div>
+        <div class="note-add">
+          <input id="note-input" list="note-vocab" maxlength="40" autocomplete="off" placeholder="e.g. summer rain">
+          <button type="button" class="btn btn--ghost btn--small" id="note-add">Add</button>
+        </div>
+        <button type="button" class="link" id="note-inspire">✨ Inspire me</button>
+        <datalist id="note-vocab"></datalist>
+      </div>
+
+      ${nice ? `<label>What flavour do you think it is?<input id="guess" maxlength="80" value="${esc(m.guess)}" placeholder="Your best guess"></label>` : ''}
+      <label>Comment<textarea id="comment" rows="2" maxlength="500" placeholder="Optional">${esc(m.comment)}</textarea></label>
+
+      <button class="btn btn--wide" type="button" id="score-send">${m[field] != null ? 'Update my score' : 'Send my score'}</button>
+      <p class="sent" id="score-sent" role="status">${m[field] != null ? '✓ Sent. You can change it until the organiser moves on.' : ''}</p>`;
+    renderStars();
+    renderNoteChips();
+    fillVocab();
+  }
+
+  function renderStars() {
+    const f = live.form;
+    const box = $('#stars');
+    if (!box) return;
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
+      const fill = f.value >= i ? 100 : f.value >= i - 0.5 ? 50 : 0;
+      const hits = f.half
+        ? `<button type="button" class="star__hit star__hit--l" data-v="${i - 0.5}" aria-label="${fmtScore(i - 0.5)} stars"></button>
+           <button type="button" class="star__hit star__hit--r" data-v="${i}" aria-label="${i} stars"></button>`
+        : `<button type="button" class="star__hit" data-v="${i}" aria-label="${plural(i, 'star')}"></button>`;
+      html += `<span class="star" style="--fill:${fill}%"><span class="star__glyph" aria-hidden="true">★</span>${hits}</span>`;
+    }
+    box.innerHTML = html;
+    $('#star-label').textContent = f.value
+      ? `${fmtScore(f.value)} ${f.value > 1 ? 'stars' : 'star'}: ${labelFor(f.value, f.labels)}`
+      : 'Tap the stars';
+  }
+
+  function renderNoteChips() {
+    $('#note-chips').innerHTML = live.form.notes.map(n =>
+      `<span class="note-chip">${esc(n)}<button type="button" data-note-remove="${esc(n)}" aria-label="Remove ${esc(n)}">×</button></span>`).join('');
+  }
+
+  function addNote(raw) {
+    const n = String(raw || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+    if (!n) return;
+    if (live.form.notes.length >= 8) return toast("That's plenty of notes!");
+    if (!live.form.notes.includes(n)) live.form.notes.push(n);
+    renderNoteChips();
+  }
+
+  async function fillVocab() {
+    if (!live.vocab) {
+      try { live.vocab = await Api.call('noteVocab'); } catch (e) { live.vocab = []; }
+    }
+    const dl = $('#note-vocab');
+    if (dl) dl.innerHTML = live.vocab.map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  $('#score-panel').addEventListener('click', e => {
+    const star = e.target.closest('[data-v]');
+    if (star) {
+      live.form.value = Number(star.dataset.v);
+      return renderStars();
+    }
+    const rm = e.target.closest('[data-note-remove]');
+    if (rm) {
+      live.form.notes = live.form.notes.filter(n => n !== rm.dataset.noteRemove);
+      return renderNoteChips();
+    }
+    if (e.target.closest('#note-add')) {
+      addNote($('#note-input').value);
+      $('#note-input').value = '';
+      return $('#note-input').focus();
+    }
+    if (e.target.closest('#note-inspire')) {
+      const pool = INSPIRATION.filter(n => !live.form.notes.includes(n));
+      $('#note-input').value = pool[Math.floor(Math.random() * pool.length)] || '';
+      return $('#note-input').focus();
+    }
+    if (e.target.closest('#score-send')) sendScore();
+  });
+
+  $('#score-panel').addEventListener('keydown', e => {
+    if (e.target.id === 'note-input' && (e.key === 'Enter' || e.key === ',')) {
+      e.preventDefault();
+      addNote(e.target.value);
+      e.target.value = '';
+    }
+  });
+
+  async function sendScore() {
+    const f = live.form;
+    if (!f.value) return toast('Tap the stars first');
+    const pending = $('#note-input').value;
+    if (pending.trim()) { addNote(pending); $('#note-input').value = ''; }
+
+    const s = lobby.test;
+    const payload = { testId: s.testId, sampleNo: s.current, notes: f.notes, comment: $('#comment').value };
+    payload[f.field] = f.value;
+    if ($('#guess')) payload.guess = $('#guess').value;
+
+    const btn = $('#score-send');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+    try {
+      await Api.call('submitScore', payload);
+      btn.textContent = 'Update my score';
+      $('#score-sent').textContent = '✓ Sent. You can change it until the organiser moves on.';
+      live.vocab = null;   // pick up any new notes next time
+      refreshLobby(true);
+    } catch (x) {
+      btn.textContent = 'Send my score';
+      toast(x.message);
+      refreshLobby(true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // ── Who's scored, and the organiser's controls ──
+  function renderStatus(s, phase) {
+    const panel = $('#status-panel');
+    panel.hidden = phase === 'done';
+    if (panel.hidden) return;
+
+    const field = phase === 'authenticity' ? 'auth' : 'nice';
+    const prog = {};
+    (s.progress || []).forEach(p => { prog[p.userId] = p; });
+    const doneCount = s.participants.filter(u => prog[u.userId] && prog[u.userId][field]).length;
+    const scoringPhase = phase === 'niceness' || phase === 'authenticity';
+    const missing = s.participants.length - doneCount;
+
+    let html = `
+      <div class="panel__head">
+        <h2>${scoringPhase ? (phase === 'niceness' ? 'Blind scores' : 'Authenticity scores') : 'Tasters'}</h2>
+        ${scoringPhase ? `<span class="muted">${doneCount} of ${s.participants.length} in</span>` : ''}
+      </div>
+      <div class="progress-chips">${s.participants.map(u => {
+        const done = scoringPhase && prog[u.userId] && prog[u.userId][field];
+        return `<span class="pchip${done ? ' pchip--done' : ''}">${esc(u.emoji)} ${esc(u.displayName)}${scoringPhase ? (done ? ' ✓' : ' …') : ''}</span>`;
+      }).join('')}</div>`;
+
+    if (s.isOrganiser) {
+      if (phase === 'choose') {
+        html += `<p class="muted org-note">Waiting for ${esc(nameOf(s.keeper))} to pick a bowl.</p>`;
+      }
+      if (phase === 'niceness') {
+        html += `<button class="btn btn--wide" type="button" data-org="reveal" data-missing="${missing}">Reveal sample ${s.current}</button>`;
+      }
+      if (phase === 'authenticity') {
+        if (s.guesses && s.guesses.length) {
+          html += `<h3 class="org-sub">Flavour guesses</h3><p class="muted">Tick the ones that got it right.</p>
+            <ul class="guess-list">${s.guesses.map(g => {
+              const u = s.participants.find(x => x.userId === g.userId);
+              return `<li>
+                <span class="guess-list__who">${esc(nameOf(u))}</span>
+                <span class="guess-list__guess">“${esc(g.guess)}”</span>
+                <span class="guess-list__btns">
+                  <button type="button" class="guess-btn${g.correct === true ? ' guess-btn--yes' : ''}" data-guess="${esc(g.userId)}" data-correct="true" aria-label="Right">✓</button>
+                  <button type="button" class="guess-btn${g.correct === false ? ' guess-btn--no' : ''}" data-guess="${esc(g.userId)}" data-correct="false" aria-label="Wrong">✗</button>
+                </span>
+              </li>`;
+            }).join('')}</ul>`;
+        }
+        const last = !s.bowlsRemaining;
+        html += `<button class="btn btn--wide" type="button" data-org="next" data-missing="${missing}">${last ? 'Finish the test' : 'Next sample'}</button>`;
+      }
+    }
+    panel.innerHTML = html;
+  }
+
+  $('#status-panel').addEventListener('click', async e => {
+    const s = lobby.test;
+    const g = e.target.closest('[data-guess]');
+    if (g) {
+      const want = g.dataset.correct === 'true';
+      const cur = (s.guesses.find(x => x.userId === g.dataset.guess) || {}).correct;
+      try {
+        await Api.call('markGuess', { testId: s.testId, sampleNo: s.current, userId: g.dataset.guess, correct: cur === want ? null : want });
+        refreshLobby(true);
+      } catch (x) { toast(x.message); }
+      return;
+    }
+
+    const b = e.target.closest('[data-org]');
+    if (!b) return;
+    const missing = Number(b.dataset.missing);
+    const act = b.dataset.org;
+    if (missing && !confirm(`${plural(missing, 'taster')} still to score. ${act === 'reveal' ? 'Reveal' : 'Move on'} anyway?`)) return;
+    if (act === 'next' && !s.bowlsRemaining && !missing && !confirm('That was the last sample. Finish the test?')) return;
+
+    b.disabled = true;
+    try {
+      await Api.call(act === 'reveal' ? 'revealSample' : 'nextSample', { testId: s.testId });
+      refreshLobby(true);
+    } catch (x) {
+      toast(x.message);
+      b.disabled = false;
+      refreshLobby(true);
+    }
+  });
+
+  $('#keeper-panel').addEventListener('click', async e => {
+    const b = e.target.closest('[data-bowl]');
+    if (!b) return;
+    if (!confirm(`Bring out bowl ${b.dataset.bowl}? Keep the letter hidden underneath.`)) return;
+    $('#keeper-panel').querySelectorAll('button').forEach(x => { x.disabled = true; });
+    try {
+      await Api.call('pickBowl', { testId: lobby.test.testId, bowl: b.dataset.bowl });
+      refreshLobby(true);
+    } catch (x) {
+      toast(x.message);
+      refreshLobby(true);
+    }
+  });
+
+  // ── Revealed so far, and the final ranking ──
+  function renderSoFar(s, finished) {
+    const panel = $('#sofar-panel');
+    const list = s.revealed || [];
+    panel.hidden = !list.length;
+    if (panel.hidden) return;
+
+    const total = r => (r.niceness == null || r.authenticity == null) ? -1 : r.niceness + r.authenticity;
+    const rows = finished ? [...list].sort((a, b) => total(b) - total(a)) : list;
+    const medal = i => (finished ? ['🥇', '🥈', '🥉'][i] || `${i + 1}.` : '');
+
+    panel.innerHTML = `
+      <h2>${finished ? 'The results' : 'Revealed so far'}</h2>
+      ${finished ? '<p class="muted">Ranked by niceness plus authenticity.</p>' : ''}
+      <ul class="sofar">${rows.map((r, i) => `
+        <li>
+          ${finished ? `<span class="sofar__rank">${medal(i)}</span>` : `<span class="sofar__num">${r.sampleNo}</span>`}
+          <span class="pick__pic">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(r.typeIcon || '🍽️')}</span>
+          <span class="pick__text"><strong>${esc(r.name)}</strong><span>${esc(r.manufacturer)}${r.vintage ? ', ' + esc(r.vintage) : ''}</span></span>
+          <span class="sofar__scores"><span title="Niceness">😋 ${fmtAvg(r.niceness)}</span><span title="Authenticity">🎯 ${fmtAvg(r.authenticity)}</span></span>
+        </li>`).join('')}
+      </ul>
+      ${finished ? '<p class="muted">Full stats, awards, word clouds and taster profiles are coming in the next update.</p>' : ''}`;
   }
 
   // ─── Product library ─────────────────────────────────────────────────────

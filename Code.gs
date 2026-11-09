@@ -3,6 +3,7 @@
  * Phase 1: workbook setup, API router, login and taster management.
  * Phase 2: types, product library, photo uploads to Drive.
  * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
+ * Phase 4: live tasting rounds: bowl picking, scoring, notes, guesses, reveal.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -17,7 +18,7 @@ const SCHEMA = {
   Types:            ['typeId', 'name', 'icon'],
   Products:         ['productId', 'productLine', 'name', 'manufacturer', 'typeId', 'vintage', 'description', 'photoUrl', 'created', 'createdBy'],
   Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt', 'keeperId', 'bowlsReady'],
-  TestProducts:     ['testId', 'sampleNo', 'productId', 'order', 'bowl'],
+  TestProducts:     ['testId', 'sampleNo', 'productId', 'order', 'bowl', 'chosenAt', 'revealedAt', 'closedAt'],
   TestParticipants: ['testId', 'userId', 'joinedAt', 'status'],
   Scores:           ['testId', 'sampleNo', 'userId', 'niceness', 'authenticity', 'flavourGuess', 'guessCorrect', 'comment', 'phaseOpenedAt', 'nicenessAt', 'authenticityAt'],
   Notes:            ['testId', 'sampleNo', 'userId', 'note', 'phase', 'created'],
@@ -110,7 +111,15 @@ const ROUTES = {
   setKeeper:          { auth: 'admin', fn: setKeeper },
   prepareBowls:       { auth: 'admin', fn: prepareBowls },
   startTest:          { auth: 'admin', fn: startTest },
-  cancelTest:         { auth: 'admin', fn: cancelTest }
+  cancelTest:         { auth: 'admin', fn: cancelTest },
+
+  // Phase 4: tasting rounds
+  pickBowl:           { auth: true,    fn: pickBowl },
+  submitScore:        { auth: true,    fn: submitScore },
+  noteVocab:          { auth: true,    fn: noteVocab },
+  revealSample:       { auth: 'admin', fn: revealSample },
+  nextSample:         { auth: 'admin', fn: nextSample },
+  markGuess:          { auth: 'admin', fn: markGuess }
 };
 
 function doPost(e) {
@@ -134,7 +143,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return json_({ ok: true, data: { app: 'Taste Test', phase: 3 } });
+  return json_({ ok: true, data: { app: 'Taste Test', phase: 4 } });
 }
 
 // ─── Tasters & login ─────────────────────────────────────────────────────────
@@ -479,6 +488,10 @@ function getTest(p, user) {
     bowlsReady: isTrue_(t.bowlsReady)
   };
 
+  if (t.status === 'live' || t.status === 'finished') {
+    Object.assign(out, liveState_(t, user, samples, parts, users));
+  }
+
   // Only the organiser sees product names and bowl letters, and only before
   // the test starts. After that the app is the only thing that knows.
   if (isOrganiser && t.status === 'lobby') {
@@ -609,6 +622,223 @@ function cancelTest(p, user) {
     setVersionCache_(t.testId, now);
     return true;
   });
+}
+
+// ─── Tasting rounds ──────────────────────────────────────────────────────────
+// Each round: choose (keeper picks a bowl) → niceness (blind) →
+// authenticity (after the reveal) → next round, or finished.
+
+function pickBowl(p, user) {
+  return withLock_(() => {
+    const t = liveTest_(p.testId, 'choose');
+    if (t.keeperId !== user.userId) throw err_('Only the bowl keeper can pick the bowl.');
+    const row = readTable_('TestProducts').find(x => x.testId === t.testId && String(x.bowl) === String(p.bowl));
+    if (!row) throw err_("There's no bowl " + p.bowl + '.');
+    if (row.sampleNo !== '') throw err_('Bowl ' + p.bowl + ' has already been tasted.');
+
+    const now = Date.now();
+    updateRow_('TestProducts', row._row, { sampleNo: Number(t.currentSample), chosenAt: now });
+    updateRow_('Tests', t._row, { phase: 'niceness', phaseOpenedAt: now });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function submitScore(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.status !== 'live') throw err_('This test has finished.');
+    if (Number(p.sampleNo) !== Number(t.currentSample)) throw err_('Too late, the organiser has moved on to the next sample.');
+    const phase = t.phase;
+    if (phase !== 'niceness' && phase !== 'authenticity') throw err_("Scoring isn't open right now.");
+    const tasting = readTable_('TestParticipants').some(x => x.testId === t.testId && x.userId === user.userId && x.status === 'in');
+    if (!tasting) throw err_("You're not tasting in this test.");
+
+    const half = isTrue_(t.halfPoints);
+    const score = cleanScore_(phase === 'niceness' ? p.niceness : p.authenticity, half);
+    const comment = cleanText_(p.comment, 'comment', 500, false);
+    const now = Date.now();
+
+    const existing = readTable_('Scores').find(x => x.testId === t.testId && Number(x.sampleNo) === Number(t.currentSample) && x.userId === user.userId);
+    const patch = { comment };
+    if (phase === 'niceness') {
+      patch.niceness = score;
+      patch.flavourGuess = cleanText_(p.guess, 'guess', 80, false);
+      if (!existing || !existing.nicenessAt) patch.nicenessAt = now;   // speed counts the first answer
+    } else {
+      patch.authenticity = score;
+      if (!existing || !existing.authenticityAt) patch.authenticityAt = now;
+    }
+    if (existing) {
+      updateRow_('Scores', existing._row, patch);
+    } else {
+      appendRow_('Scores', Object.assign({
+        testId: t.testId, sampleNo: Number(t.currentSample), userId: user.userId,
+        niceness: '', authenticity: '', flavourGuess: '', guessCorrect: '', comment: '',
+        phaseOpenedAt: t.phaseOpenedAt, nicenessAt: '', authenticityAt: ''
+      }, patch));
+    }
+
+    // Notes are replaced as a set for this phase
+    const notePhase = phase === 'niceness' ? 'blind' : 'revealed';
+    const notes = cleanNotes_(p.notes);
+    deleteWhere_('Notes', x => x.testId === t.testId && Number(x.sampleNo) === Number(t.currentSample) && x.userId === user.userId && x.phase === notePhase);
+    appendRows_('Notes', notes.map(n => ({ testId: t.testId, sampleNo: Number(t.currentSample), userId: user.userId, note: n, phase: notePhase, created: now })));
+
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function revealSample(p, user) {
+  return withLock_(() => {
+    const t = liveTest_(p.testId, 'niceness');
+    if (t.organiserId !== user.userId) throw err_('Only the organiser can reveal.');
+    const now = Date.now();
+    const row = currentRow_(t);
+    if (row) updateRow_('TestProducts', row._row, { revealedAt: now });
+    updateRow_('Tests', t._row, { phase: 'authenticity', phaseOpenedAt: now });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function nextSample(p, user) {
+  return withLock_(() => {
+    const t = liveTest_(p.testId, 'authenticity');
+    if (t.organiserId !== user.userId) throw err_('Only the organiser can move on.');
+    const now = Date.now();
+    const rows = readTable_('TestProducts').filter(x => x.testId === t.testId);
+    const row = rows.find(x => Number(x.sampleNo) === Number(t.currentSample));
+    if (row) updateRow_('TestProducts', row._row, { closedAt: now });
+
+    const left = rows.filter(x => x.sampleNo === '').length;
+    if (left) {
+      updateRow_('Tests', t._row, { currentSample: Number(t.currentSample) + 1, phase: 'choose', phaseOpenedAt: now });
+    } else {
+      updateRow_('Tests', t._row, { status: 'finished', phase: 'done', phaseOpenedAt: now, finishedAt: now });
+    }
+    bumpTest_(t);
+    return { finished: !left };
+  });
+}
+
+function markGuess(p, user) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t || t.organiserId !== user.userId) throw err_('Only the organiser can mark guesses.');
+    const row = readTable_('Scores').find(x => x.testId === t.testId && Number(x.sampleNo) === Number(p.sampleNo) && x.userId === p.userId);
+    if (!row) throw err_('No guess found.');
+    updateRow_('Scores', row._row, { guessCorrect: p.correct === true ? true : p.correct === false ? false : '' });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+// Every note anyone has used, most popular first, for autocomplete
+function noteVocab() {
+  const counts = {};
+  readTable_('Notes').forEach(n => {
+    const k = String(n.note).toLowerCase();
+    if (k) counts[k] = (counts[k] || 0) + 1;
+  });
+  return Object.keys(counts).sort((a, b) => counts[b] - counts[a]).slice(0, 400);
+}
+
+// The live part of getTest: who's scored, my own answers, the reveal and results
+function liveState_(t, user, samples, parts, users) {
+  const cur = Number(t.currentSample);
+  const scores = readTable_('Scores').filter(x => x.testId === t.testId);
+  const products = productMap_();
+  const types = {};
+  readTable_('Types').forEach(x => { types[x.typeId] = x; });
+  const productInfo = pr => pr ? {
+    name: String(pr.name), manufacturer: String(pr.manufacturer), vintage: String(pr.vintage),
+    description: String(pr.description || ''), photoUrl: pr.photoUrl,
+    typeIcon: types[pr.typeId] ? types[pr.typeId].icon : ''
+  } : null;
+  const out = { sampleTotal: samples.length, current: cur };
+
+  if (t.status === 'live') {
+    const curScores = scores.filter(x => Number(x.sampleNo) === cur);
+    out.progress = parts.map(x => {
+      const sc = curScores.find(y => y.userId === x.userId);
+      return { userId: x.userId, nice: !!(sc && sc.niceness !== ''), auth: !!(sc && sc.authenticity !== '') };
+    });
+
+    const mine = curScores.find(x => x.userId === user.userId);
+    const myNotes = readTable_('Notes').filter(n => n.testId === t.testId && Number(n.sampleNo) === cur && n.userId === user.userId);
+    out.mine = {
+      niceness: mine && mine.niceness !== '' ? Number(mine.niceness) : null,
+      authenticity: mine && mine.authenticity !== '' ? Number(mine.authenticity) : null,
+      guess: mine ? String(mine.flavourGuess || '') : '',
+      comment: mine ? String(mine.comment || '') : '',
+      notesBlind: myNotes.filter(n => n.phase === 'blind').map(n => String(n.note)),
+      notesRevealed: myNotes.filter(n => n.phase === 'revealed').map(n => String(n.note))
+    };
+
+    if (t.phase === 'choose' && t.keeperId === user.userId) {
+      out.bowlsLeft = samples.filter(x => x.sampleNo === '').map(x => String(x.bowl))
+        .sort((a, b) => (a.length - b.length) || a.localeCompare(b));
+    }
+    out.bowlsRemaining = samples.filter(x => x.sampleNo === '').length;
+
+    if (t.phase === 'authenticity') {
+      const row = samples.find(x => Number(x.sampleNo) === cur);
+      out.reveal = row ? productInfo(products[row.productId]) : null;
+      if (t.organiserId === user.userId) {
+        out.guesses = curScores.filter(x => x.flavourGuess).map(x => ({
+          userId: x.userId, guess: String(x.flavourGuess),
+          correct: x.guessCorrect === '' ? null : isTrue_(x.guessCorrect)
+        }));
+      }
+    }
+  }
+
+  // Samples already revealed, for the "so far" strip and the final results
+  const done = samples
+    .filter(x => x.sampleNo !== '' && (Number(x.sampleNo) < cur || t.status === 'finished' || (Number(x.sampleNo) === cur && t.phase === 'authenticity')))
+    .sort((a, b) => Number(a.sampleNo) - Number(b.sampleNo));
+  out.revealed = done.map(x => {
+    const sc = scores.filter(y => Number(y.sampleNo) === Number(x.sampleNo));
+    const avg = f => {
+      const v = sc.map(y => y[f]).filter(v => v !== '').map(Number);
+      return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100) / 100 : null;
+    };
+    return Object.assign({ sampleNo: Number(x.sampleNo), bowl: String(x.bowl), niceness: avg('niceness'), authenticity: avg('authenticity') },
+      productInfo(products[x.productId]));
+  });
+  return out;
+}
+
+function liveTest_(testId, phase) {
+  const t = findTest_(testId);
+  if (!t || t.status !== 'live') throw err_("This test isn't running.");
+  if (phase && t.phase !== phase) throw err_('Things have moved on. Refreshing…');
+  return t;
+}
+
+function currentRow_(t) {
+  return readTable_('TestProducts').find(x => x.testId === t.testId && Number(x.sampleNo) === Number(t.currentSample)) || null;
+}
+
+function cleanScore_(v, half) {
+  const n = Number(v);
+  const step = half ? 0.5 : 1;
+  if (!isFinite(n) || n < step || n > 5 || Math.round(n / step) !== n / step) {
+    throw err_('Pick a score from ' + (half ? '½' : '1') + ' to 5 stars.');
+  }
+  return n;
+}
+
+function cleanNotes_(list) {
+  const arr = Array.isArray(list) ? list : [];
+  const out = [];
+  arr.forEach(n => {
+    const s = String(n || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+    if (s && out.indexOf(s) === -1) out.push(s);
+  });
+  return out.slice(0, 8);
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
