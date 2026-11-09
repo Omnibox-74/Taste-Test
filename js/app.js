@@ -1090,6 +1090,7 @@
   $('#results-back').addEventListener('click', () => {
     if (results.from === 'live' && lobby.testId) return openLobby(lobby.testId);
     if (results.from === 'history') return goHistory();
+    if (results.from === 'reviews') return goReviews();
     goHome();
   });
 
@@ -1451,6 +1452,267 @@
   function listNames(users) {
     const names = users.map(u => `${u.emoji} ${u.displayName}`);
     return names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || '';
+  }
+
+  // ─── Reviews ─────────────────────────────────────────────────────────────
+  const reviews = { list: [], types: [], filter: 'all', search: '', sort: 'total', onlyMine: false, compare: [], chart: null };
+
+  $('#open-reviews').addEventListener('click', goReviews);
+  $('#reviews-back').addEventListener('click', () => goHome());
+
+  async function goReviews() {
+    show('screen-reviews');
+    $('#review-grid').innerHTML = '<p class="loading">Fetching reviews…</p>';
+    $('#review-count').textContent = '';
+    try {
+      const r = await Api.call('listReviews');
+      reviews.list = r.products;
+      reviews.types = r.types;
+    } catch (e) {
+      $('#review-grid').innerHTML = `<p class="error">${esc(e.message)}</p>`;
+      return;
+    }
+    const ids = new Set(reviews.list.map(p => p.productId));
+    reviews.compare = reviews.compare.filter(id => ids.has(id));
+    renderReviews();
+  }
+
+  const rTypeOf = id => reviews.types.find(t => t.typeId === id) || { name: '', icon: '🍽️' };
+  const rTotal = p => (p.nice == null || p.auth == null ? -1 : p.nice + p.auth);
+  const myTotal = p => (p.mine ? (p.mine.nice ?? 0) + (p.mine.auth ?? 0) : -1);
+  const verdict = m => {
+    if (!m || m.nice == null) return '';
+    if (m.nice >= 4) return '👍 You liked it';
+    if (m.nice <= 2) return '👎 Not for you';
+    return '🤷 You were so-so';
+  };
+
+  function renderReviews() {
+    const used = new Set(reviews.list.map(p => p.typeId));
+    const types = reviews.types.filter(t => used.has(t.typeId));
+    if (reviews.filter !== 'all' && !used.has(reviews.filter)) reviews.filter = 'all';
+    $('#review-types').innerHTML = [{ typeId: 'all', name: 'All', icon: '' }, ...types].map(t => {
+      const on = reviews.filter === t.typeId;
+      return `<button type="button" class="chip${on ? ' chip--on' : ''}" data-type="${esc(t.typeId)}" aria-pressed="${on}">${t.icon ? esc(t.icon) + ' ' : ''}${esc(t.name)}</button>`;
+    }).join('');
+
+    const q = reviews.search.toLowerCase();
+    let list = reviews.list.filter(p =>
+      (reviews.filter === 'all' || p.typeId === reviews.filter) &&
+      (!reviews.onlyMine || p.mine) &&
+      (!q || [p.name, p.manufacturer, p.vintage, p.productLine, p.description, rTypeOf(p.typeId).name].join(' ').toLowerCase().includes(q)));
+
+    const sorters = {
+      total: (a, b) => rTotal(b) - rTotal(a),
+      nice: (a, b) => (b.nice ?? -1) - (a.nice ?? -1),
+      auth: (a, b) => (b.auth ?? -1) - (a.auth ?? -1),
+      mine: (a, b) => myTotal(b) - myTotal(a),
+      recent: (a, b) => String(b.lastTasted).localeCompare(String(a.lastTasted)),
+      name: (a, b) => a.name.localeCompare(b.name)
+    };
+    list = [...list].sort(sorters[reviews.sort]);
+
+    $('#review-count').textContent = reviews.list.length
+      ? `${plural(list.length, 'product')}${list.length !== reviews.list.length ? ` of ${reviews.list.length}` : ''}` : '';
+
+    $('#review-grid').innerHTML = list.length ? list.map(p => {
+      const t = rTypeOf(p.typeId);
+      const picked = reviews.compare.includes(p.productId);
+      return `
+        <div class="review-card${picked ? ' review-card--picked' : ''}">
+          <button type="button" class="review-card__main" data-review="${esc(p.productId)}">
+            <span class="review-card__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(t.icon)}</span>
+            <span class="review-card__body">
+              <strong>${esc(p.name)}</strong>
+              <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
+              <span class="review-card__scores"><span>😋 <b>${fmtAvg(p.nice)}</b></span><span>🎯 <b>${fmtAvg(p.auth)}</b></span></span>
+              <span class="review-card__mine">${p.mine ? `${verdict(p.mine)}: 😋 ${fmtAvg(p.mine.nice)} 🎯 ${fmtAvg(p.mine.auth)}` : "You haven't tasted it"}</span>
+              <span class="review-card__meta">${plural(p.appearances.length, 'test')}, last on ${esc(fmtDate(p.lastTasted))}</span>
+            </span>
+          </button>
+          <label class="review-card__compare"><input type="checkbox" data-compare="${esc(p.productId)}"${picked ? ' checked' : ''}> Compare</label>
+        </div>`;
+    }).join('') : `<p class="empty">${reviews.list.length ? 'Nothing matches that.' : 'Nothing has been tasted yet. Products appear here once a test finishes.'}</p>`;
+
+    renderCompareBar();
+  }
+
+  function renderCompareBar() {
+    const n = reviews.compare.length;
+    $('#compare-bar').hidden = n === 0;
+    $('#compare-count').textContent = n === 1 ? '1 chosen. Pick another to compare' : `${n} chosen`;
+    $('#compare-go').disabled = n < 2;
+  }
+
+  $('#review-types').addEventListener('click', e => {
+    const b = e.target.closest('[data-type]');
+    if (b) { reviews.filter = b.dataset.type; renderReviews(); }
+  });
+  $('#review-search').addEventListener('input', e => { reviews.search = e.target.value.trim(); renderReviews(); });
+  $('#review-sort').addEventListener('change', e => { reviews.sort = e.target.value; renderReviews(); });
+  $('#review-mine').addEventListener('change', e => { reviews.onlyMine = e.target.checked; renderReviews(); });
+
+  $('#review-grid').addEventListener('click', e => {
+    const b = e.target.closest('[data-review]');
+    if (b) openReviewDetail(b.dataset.review);
+  });
+
+  $('#review-grid').addEventListener('change', e => {
+    const box = e.target.closest('[data-compare]');
+    if (!box) return;
+    const id = box.dataset.compare;
+    if (box.checked) {
+      if (reviews.compare.length >= 4) {
+        box.checked = false;
+        return toast('You can compare up to four at a time');
+      }
+      reviews.compare.push(id);
+    } else {
+      reviews.compare = reviews.compare.filter(x => x !== id);
+    }
+    box.closest('.review-card').classList.toggle('review-card--picked', box.checked);
+    renderCompareBar();
+  });
+
+  $('#compare-clear').addEventListener('click', () => { reviews.compare = []; renderReviews(); });
+  $('#compare-go').addEventListener('click', openCompare);
+
+  async function openReviewDetail(productId) {
+    const p = reviews.list.find(x => x.productId === productId);
+    if (!p) return;
+    let detail;
+    try {
+      detail = await Api.call('getProductReview', { productId });
+    } catch (e) {
+      return toast(e.message);
+    }
+    const t = rTypeOf(p.typeId);
+    const others = p.productLine
+      ? reviews.list.filter(x => x.productLine === p.productLine && x.productId !== p.productId)
+          .sort((a, b) => String(b.vintage).localeCompare(String(a.vintage)))
+      : [];
+    const cloud = Object.keys(detail.notes).map(word => ({ word, count: detail.notes[word] }))
+      .sort((a, b) => b.count - a.count).slice(0, 30);
+
+    openDialog({
+      title: p.name,
+      ok: 'Done',
+      wide: true,
+      noCancel: true,
+      body: `
+        <div class="detail-head">
+          <span class="detail-head__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" referrerpolicy="no-referrer">` : esc(t.icon)}</span>
+          <div>
+            <p class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}${t.name ? '. ' + esc(t.icon + ' ' + t.name) : ''}</p>
+            <p class="detail-head__scores">😋 ${fmtAvg(p.nice)} &nbsp; 🎯 ${fmtAvg(p.auth)}</p>
+            <p class="muted">${plural(p.ratings, 'rating')}${p.mine ? `. ${verdict(p.mine)}` : ''}</p>
+          </div>
+        </div>
+        ${p.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(p.description)}</p>` : ''}
+
+        <h3 class="org-sub">Tasted in</h3>
+        <ul class="appearances">${p.appearances.map(a => `
+          <li>
+            <span><strong>${esc(a.testName)}</strong><span class="muted">${esc(fmtDate(a.testDate))}${a.source === 'paper' ? ', from paper' : ''}</span></span>
+            <span class="appearances__scores">😋 ${fmtAvg(a.nice)} 🎯 ${fmtAvg(a.auth)}</span>
+            <button type="button" class="link" data-open-test="${esc(a.testId)}">Results</button>
+          </li>`).join('')}
+        </ul>
+
+        ${others.length ? `
+          <h3 class="org-sub">Other vintages</h3>
+          <div class="vintages">${others.map(o => `
+            <button type="button" class="chip" data-other="${esc(o.productId)}">${esc(o.vintage || o.name)}: 😋 ${fmtAvg(o.nice)} 🎯 ${fmtAvg(o.auth)}</button>`).join('')}
+          </div>` : ''}
+
+        <h3 class="org-sub">What everyone said</h3>
+        <ul class="detail-scores">${detail.scores.map(r => `
+          <li>
+            <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}</span>
+            <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+            ${p.appearances.length > 1 ? `<span class="detail-scores__extra">${esc(r.testName)}</span>` : ''}
+            ${r.guess ? `<span class="detail-scores__extra">Guessed “${esc(r.guess)}”${r.guessCorrect === true ? ' ✅' : r.guessCorrect === false ? ' ❌' : ''}</span>` : ''}
+            ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
+          </li>`).join('')}
+        </ul>
+        ${cloud.length ? `<h3 class="org-sub">Notes of…</h3>${cloudHTML(cloud)}` : ''}`,
+      onOk: async () => {}
+    });
+  }
+
+  // Links inside the review detail (one listener, since the dialog body is reused)
+  $('#dialog-body').addEventListener('click', e => {
+    const testBtn = e.target.closest('[data-open-test]');
+    if (testBtn) {
+      $('#dialog').close();
+      return openResults(testBtn.dataset.openTest, 'reviews');
+    }
+    const other = e.target.closest('[data-other]');
+    if (other) {
+      $('#dialog').close();
+      openReviewDetail(other.dataset.other);
+    }
+  });
+
+  function openCompare() {
+    const picks = reviews.compare.map(id => reviews.list.find(p => p.productId === id)).filter(Boolean);
+    if (picks.length < 2) return;
+    const rows = [
+      ['Overall', p => (rTotal(p) < 0 ? null : rTotal(p) / 2), true],
+      ['😋 Nice', p => p.nice, true],
+      ['🎯 True', p => p.auth, true],
+      ['You 😋', p => (p.mine ? p.mine.nice : null), true],
+      ['You 🎯', p => (p.mine ? p.mine.auth : null), true],
+      ['Ratings', p => p.ratings, false],
+      ['Tests', p => p.appearances.length, false]
+    ];
+    const cell = (v, best, isScore) => `<td${best ? ' class="best"' : ''}>${v == null ? '–' : isScore ? fmtAvg(v) : v}</td>`;
+
+    openDialog({
+      title: 'Compare',
+      ok: 'Done',
+      wide: true,
+      noCancel: true,
+      body: `
+        <div class="table-wrap">
+          <table class="compare-table">
+            <thead><tr><th></th>${picks.map(p => `
+              <th scope="col">
+                <span class="compare-table__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" referrerpolicy="no-referrer">` : esc(rTypeOf(p.typeId).icon)}</span>
+                <span>${esc(p.name)}</span>
+                <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
+              </th>`).join('')}</tr></thead>
+            <tbody>${rows.map(([label, fn, isScore]) => {
+              const vals = picks.map(fn);
+              const top = Math.max(...vals.filter(v => v != null));
+              return `<tr><th scope="row">${label}</th>${vals.map(v => cell(v, isScore && v != null && v === top && vals.filter(x => x != null).length > 1, isScore)).join('')}</tr>`;
+            }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="muted">Overall is the average of niceness (😋) and authenticity (🎯). “You” is your own score. The best in each row is highlighted.</p>
+        ${typeof window.Chart !== 'undefined' ? '<div class="chart-box"><canvas id="chart-compare" role="img" aria-label="Niceness and authenticity compared"></canvas></div>' : ''}`,
+      onOpen: () => {
+        if (typeof window.Chart === 'undefined') return;
+        if (reviews.chart) reviews.chart.destroy();
+        const c = chartColours();
+        Chart.defaults.color = c.muted;
+        Chart.defaults.borderColor = c.line;
+        Chart.defaults.font.family = c.body;
+        reviews.chart = new Chart($('#chart-compare'), {
+          type: 'bar',
+          data: {
+            labels: picks.map(p => (p.vintage ? `${p.name} (${p.vintage})` : p.name)),
+            datasets: [
+              { label: 'Niceness', data: picks.map(p => p.nice), backgroundColor: c.red, borderRadius: 4 },
+              { label: 'Authenticity', data: picks.map(p => p.auth), backgroundColor: c.green, borderRadius: 4 }
+            ]
+          },
+          options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
+        });
+      },
+      onOk: async () => {}
+    });
   }
 
   // ─── Product library ─────────────────────────────────────────────────────

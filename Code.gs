@@ -4,7 +4,7 @@
  * Phase 2: types, product library, photo uploads to Drive.
  * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
  * Phase 4: live tasting rounds: bowl picking, scoring, notes, guesses, reveal.
- * Phase 5: results, awards and stats, past tests.
+ * Phase 5: results, awards and stats, past tests, product reviews.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -124,7 +124,9 @@ const ROUTES = {
 
   // Phase 5: results and history
   listPastTests:      { auth: true,    fn: listPastTests },
-  getResults:         { auth: true,    fn: getResults }
+  getResults:         { auth: true,    fn: getResults },
+  listReviews:        { auth: true,    fn: listReviews },
+  getProductReview:   { auth: true,    fn: getProductReview }
 };
 
 function doPost(e) {
@@ -661,14 +663,14 @@ function submitScore(p, user) {
 
     const half = isTrue_(t.halfPoints);
     const score = cleanScore_(phase === 'niceness' ? p.niceness : p.authenticity, half);
-    const comment = cleanText_(p.comment, 'comment', 500, false);
     const now = Date.now();
 
     const existing = readTable_('Scores').find(x => x.testId === t.testId && Number(x.sampleNo) === Number(t.currentSample) && x.userId === user.userId);
-    const patch = { comment };
+    const patch = {};
+    if (p.comment !== undefined) patch.comment = cleanText_(p.comment, 'comment', 500, false);   // leave it alone if not sent
     if (phase === 'niceness') {
       patch.niceness = score;
-      patch.flavourGuess = cleanText_(p.guess, 'guess', 80, false);
+      if (p.guess !== undefined) patch.flavourGuess = cleanText_(p.guess, 'guess', 80, false);
       if (!existing || !existing.nicenessAt) patch.nicenessAt = now;   // speed counts the first answer
     } else {
       patch.authenticity = score;
@@ -934,6 +936,88 @@ function getResults(p) {
     samples, scores, notes,
     tasters: Object.keys(ids).map(id => users[id]).filter(Boolean)
   };
+}
+
+// ─── Reviews: every product that's been through a finished test ─────────────
+function reviewData_() {
+  const finished = {};
+  readTable_('Tests').filter(t => t.status === 'finished').forEach(t => { finished[t.testId] = t; });
+  const samples = readTable_('TestProducts').filter(x => finished[x.testId] && x.sampleNo !== '');
+  const scores = readTable_('Scores').filter(x => finished[x.testId]);
+  return { finished, samples, scores };
+}
+
+function listReviews(p, user) {
+  const { finished, samples, scores } = reviewData_();
+  const products = productMap_();
+  const avg = list => (list.length ? Math.round(list.reduce((a, b) => a + b, 0) / list.length * 100) / 100 : null);
+  const vals = (rows, f) => rows.map(r => r[f]).filter(v => v !== '').map(Number);
+  const byProduct = {};
+
+  samples.forEach(x => {
+    const pr = products[x.productId];
+    if (!pr) return;
+    const t = finished[x.testId];
+    const rows = scores.filter(y => y.testId === x.testId && Number(y.sampleNo) === Number(x.sampleNo));
+    const entry = byProduct[x.productId] = byProduct[x.productId] || {
+      productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
+      vintage: String(pr.vintage), typeId: pr.typeId, productLine: String(pr.productLine || ''),
+      photoUrl: pr.photoUrl, description: String(pr.description || ''),
+      appearances: [], _n: [], _a: [], _myN: [], _myA: []
+    };
+    entry.appearances.push({
+      testId: t.testId, testName: String(t.name), testDate: t.testDate, source: t.source || 'live',
+      nice: avg(vals(rows, 'niceness')), auth: avg(vals(rows, 'authenticity')), tasters: rows.length
+    });
+    entry._n = entry._n.concat(vals(rows, 'niceness'));
+    entry._a = entry._a.concat(vals(rows, 'authenticity'));
+    const mine = rows.filter(r => r.userId === user.userId);
+    entry._myN = entry._myN.concat(vals(mine, 'niceness'));
+    entry._myA = entry._myA.concat(vals(mine, 'authenticity'));
+  });
+
+  const list = Object.keys(byProduct).map(id => {
+    const e = byProduct[id];
+    e.appearances.sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
+    const out = Object.assign({}, e, {
+      nice: avg(e._n), auth: avg(e._a), ratings: e._n.length,
+      mine: e._myN.length || e._myA.length ? { nice: avg(e._myN), auth: avg(e._myA) } : null,
+      lastTasted: e.appearances[0] ? e.appearances[0].testDate : ''
+    });
+    delete out._n; delete out._a; delete out._myN; delete out._myA;
+    return out;
+  });
+  return { products: list, types: readTable_('Types') };
+}
+
+// Everyone's scores and comments for one product, across every test it was in
+function getProductReview(p) {
+  const { finished, samples, scores } = reviewData_();
+  const users = userMap_();
+  const mine = samples.filter(x => x.productId === p.productId);
+  if (!mine.length) throw err_("That product hasn't been tasted in a finished test yet.");
+  const notes = readTable_('Notes');
+  const num = v => (v === '' ? null : Number(v));
+  const out = { scores: [], notes: {} };
+
+  mine.forEach(x => {
+    const t = finished[x.testId];
+    scores.filter(y => y.testId === x.testId && Number(y.sampleNo) === Number(x.sampleNo)).forEach(y => {
+      out.scores.push({
+        testId: t.testId, testName: String(t.name), testDate: t.testDate,
+        user: users[y.userId] || { emoji: '👤', displayName: 'Someone' },
+        niceness: num(y.niceness), authenticity: num(y.authenticity),
+        guess: String(y.flavourGuess || ''), guessCorrect: y.guessCorrect === '' ? null : isTrue_(y.guessCorrect),
+        comment: String(y.comment || '')
+      });
+    });
+    notes.filter(n => n.testId === x.testId && Number(n.sampleNo) === Number(x.sampleNo)).forEach(n => {
+      const k = String(n.note);
+      out.notes[k] = (out.notes[k] || 0) + 1;
+    });
+  });
+  out.scores.sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
+  return out;
 }
 
 // ─── Test helpers ────────────────────────────────────────────────────────────
