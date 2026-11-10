@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=20261111">
+  <link rel="stylesheet" href="css/style.css?v=20261112">
 </head>
 <body>
 <main class="help">
@@ -114,7 +114,8 @@
       <li>It appears under <strong>Open tastings</strong> on everyone’s home screen, with how many you’ve rated so far.</li>
       <li>Tap a product to rate it. You know what it is, so you give both scores at once, plus notes and a comment if you like. You can change your scores until it closes.</li>
       <li>Rate whichever ones you’ve tried. Your progress (“You’ve rated 2 of 5”) and a ✓ on each one show what’s left.</li>
-      <li>When someone turns up with another pack, an admin taps <strong>Add a product</strong> and everyone can rate that too.</li>
+      <li>When someone turns up with another pack, an admin taps <strong>Add a product</strong> and everyone can rate that too. Pop in what it cost and the app works out the price each.</li>
+      <li>Value for money scoring is on by default for open tastings, so you’ll give three scores. Admins can switch it off with <strong>Turn value scoring off</strong>.</li>
       <li>It stays open for days or weeks, so friends elsewhere can buy their own packs and join in. A leaderboard shows how things stand.</li>
       <li>Admins close it when everyone’s done. It then sits in <strong>Past tests</strong> with full results and awards, and every product is in <strong>Reviews</strong>.</li>
     </ul>
@@ -146,6 +147,18 @@
         <tr><th scope="row">3</th><td>Getting there</td></tr>
         <tr><th scope="row">4</th><td>Very close</td></tr>
         <tr><th scope="row">5</th><td>Exactly as promised</td></tr>
+      </table>
+    </div>
+
+    <div class="score-card">
+      <h3>💷 Value for money <span class="hint">When switched on</span></h3>
+      <p class="score-card__q">Was it worth what it cost? You’ll see the price, and the price each, so you can judge. In blind tests this comes after the reveal.</p>
+      <table class="scale">
+        <tr><th scope="row">1</th><td>Daylight robbery</td></tr>
+        <tr><th scope="row">2</th><td>Overpriced</td></tr>
+        <tr><th scope="row">3</th><td>Fair enough</td></tr>
+        <tr><th scope="row">4</th><td>Good value</td></tr>
+        <tr><th scope="row">5</th><td>An absolute bargain</td></tr>
       </table>
     </div>
 
@@ -229,6 +242,7 @@
       <li><strong>Prepare bowls</strong> gives each product a random letter. Fill a bowl for each one and stick its letter <strong>underneath</strong> on a post-it, so it can’t be seen when served. Keep the list to yourself. It disappears for good once the test starts.</li>
       <li>Choose a <strong>bowl keeper</strong>. If you’re tasting, pick someone else, because you know what’s in the bowls.</li>
       <li>Changing the products after preparing the bowls clears the letters, so you’d need to relabel.</li>
+      <li>Optionally, step 4 lets you <strong>Set prices</strong> (price, how many in the pack, and the shop), shown to everyone at the reveal, and turn on <strong>value for money</strong> scoring.</li>
       <li>Tap <strong>Start the test</strong> when everything has a green tick and everyone’s in.</li>
       <li>During each round you’ll see who has scored. Tap <strong>Reveal</strong> once everyone’s in, then <strong>Next sample</strong> after the authenticity scores. You can go ahead without someone if they’ve wandered off.</li>
       <li>After each reveal, tick or cross everyone’s flavour guesses. These decide the <em>Best Palate</em> award.</li>

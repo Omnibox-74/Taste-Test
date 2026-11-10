@@ -30,16 +30,22 @@ window.Stats = (() => {
 
   function compute(d) {
     // ── Products ──
+    // When several share a name ("Mince Pies"), label them by maker too
+    const nameCount = {};
+    d.samples.forEach(s => { const k = s.name.toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
     const samples = d.samples.map(s => {
       const sc = d.scores.filter(x => x.sampleNo === s.sampleNo);
       const N = sc.map(x => x.niceness).filter(present);
       const A = sc.map(x => x.authenticity).filter(present);
+      const V = sc.map(x => x.value).filter(present);
       const nice = mean(N);
       const auth = mean(A);
       return Object.assign({}, s, {
+        label: nameCount[s.name.toLowerCase()] > 1 ? `${s.manufacturer} ${s.name}`.trim() : s.name,
         scores: sc,
         notes: d.notes.filter(x => x.sampleNo === s.sampleNo),
-        nice, auth,
+        nice, auth, value: mean(V),
+        unit: s.price ? (s.price.qty ? s.price.price / s.price.qty : s.price.price) : null,
         total: present(nice) && present(auth) ? nice + auth : null,
         gap: present(nice) && present(auth) ? nice - auth : null,
         spread: sd(N)
@@ -70,7 +76,7 @@ window.Stats = (() => {
 
       // Seconds from the bowl arriving (or the reveal) to their first score
       const times = [];
-      mine.forEach(m => {
+      if (!d.test || d.test.source !== 'open') mine.forEach(m => {   // open tastings have no "bowl arrived" moment
         const s = d.samples.find(x => x.sampleNo === m.sampleNo);
         if (!s) return;
         if (m.nicenessAt && s.chosenAt) times.push((m.nicenessAt - s.chosenAt) / 1000);
@@ -142,6 +148,22 @@ window.Stats = (() => {
         const spoon = best(scored, 'total', -1);
         p('🥄', 'Wooden spoon', spoon, 'Bottom of the pile');
       }
+      const valued = samples.filter(s => present(s.value));
+      if (valued.length >= 2) {
+        const bargain = best(valued, 'value');
+        p('💷', 'Bargain buy', bargain, `${f1(bargain.value)} for value for money`);
+        const robbery = best(valued, 'value', -1);
+        if (robbery.value < 3) p('💸', 'Daylight robbery', robbery, `Only ${f1(robbery.value)} for value`);
+      }
+      const priced = samples.filter(s => present(s.unit));
+      if (priced.length >= 2) {
+        const cheap = best(priced, 'unit', -1);
+        const dear = best(priced, 'unit');
+        if (cheap !== dear) {
+          p('🪙', 'Cheapest', cheap, 'Lowest price each');
+          p('👑', 'Priciest', dear, 'Highest price each');
+        }
+      }
     }
 
     if (tasters.length >= 2) {
@@ -187,13 +209,14 @@ window.Stats = (() => {
 
     // ── Every star given, for the score spread chart ──
     const distribution = {};
-    d.scores.forEach(x => ['niceness', 'authenticity'].forEach(f => {
+    d.scores.forEach(x => ['niceness', 'authenticity', 'value'].forEach(f => {
       if (present(x[f])) distribution[x[f]] = (distribution[x[f]] || 0) + 1;
     }));
 
     return {
       samples, tasters, axes, pct, awards, cloud, greatMinds, distribution,
-      hasTiming: tasters.some(x => present(x.speed))
+      hasTiming: tasters.some(x => present(x.speed)),
+      hasValue: samples.some(x => present(x.value))
     };
   }
 

@@ -1146,3 +1146,20 @@ dialog .chart-box { max-width: 100%; overflow: hidden; }
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(0, 0, 0, .3);
 }
+
+/* ─── Value for money and prices ─── */
+.bar__fill--v { background: var(--star); }
+.price-tag { font-weight: 700; margin: .5rem 0 0; }
+.value-q { margin-top: 1.5rem; }
+.open-item__price, .review-card__price, .appearances__price { font-size: .88rem; font-weight: 700; }
+.appearances__price { grid-column: 1 / -1; color: var(--muted); }
+.price-list { list-style: none; margin: .5rem 0 0; padding: 0; }
+.price-list li { padding: .75rem 0; border-top: 1px solid var(--line); }
+.price-list li > .muted { display: block; font-size: .9rem; }
+.price-row { display: grid; grid-template-columns: 1fr .8fr 1.3fr; gap: .5rem; margin-top: .5rem; }
+.price-row label { margin: 0; font-size: .85rem; }
+.price-row input { padding: .55rem .6rem; font-size: 1rem; }
+.price-row--add { margin-top: 1rem; }
+#open-admin .row--tight { margin-bottom: 1.25rem; }
+#open-admin .row--tight .btn { margin-bottom: 0; }
+#res-ranking .chips { flex-wrap: wrap; overflow: visible; }

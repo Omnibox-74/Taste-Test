@@ -357,6 +357,7 @@
         <label>Name<input name="name" maxlength="60" placeholder="Christmas crisps"></label>
         <label>Date<input name="testDate" type="date" value="${iso}"></label>
         <label class="check"><input type="checkbox" name="halfPoints"> Allow half points</label>
+        <label class="check"><input type="checkbox" name="valueScoring"> Score value for money <span class="hint">A third score after the reveal</span></label>
         <label class="check"><input type="checkbox" name="tasting" checked> I'm tasting too</label>
         ${productPicker([])}`,
       onOpen: wirePicker,
@@ -366,6 +367,7 @@
           name: f.get('name'),
           testDate: f.get('testDate'),
           halfPoints: f.get('halfPoints') === 'on',
+          valueScoring: f.get('valueScoring') === 'on',
           tasting: f.get('tasting') === 'on',
           productIds: f.getAll('productIds')
         });
@@ -607,6 +609,13 @@
         : "Picks the bowls during tasting, without knowing what's in them",
       `<button class="link" type="button" data-setup="keeper">${s.keeper ? 'Change' : 'Choose'}</button>`);
 
+    const priced = s.products.filter(p => p.price).length;
+    $('#setup-prices').innerHTML = step(priced > 0 || s.valueScoring, 4, 'Prices and value <span class="hint">Optional</span>',
+      `${priced ? `${priced} of ${s.products.length} priced, shown at the reveal` : 'Add what each one cost, shown at the reveal'}. ` +
+      `Value for money scoring is <strong>${s.valueScoring ? 'on' : 'off'}</strong>.`,
+      `<button class="link" type="button" data-setup="prices"${s.products.length ? '' : ' disabled'}>Set prices</button>
+       <button class="link" type="button" data-setup="value">Turn value scoring ${s.valueScoring ? 'off' : 'on'}</button>`);
+
     const list = $('#bowl-list');
     list.hidden = !(s.bowlsReady && lobby.showBowls);
     if (!list.hidden) {
@@ -631,6 +640,18 @@
     }
     if (act === 'products') return editLobbyProducts();
     if (act === 'keeper') return chooseKeeper();
+    if (act === 'prices') {
+      return openPricesDialog(s.testId, s.products.map(p => ({
+        productId: p.productId, title: p.name, sub: [p.manufacturer, p.vintage].filter(Boolean).join(', '), price: p.price
+      })), () => refreshLobby(true));
+    }
+    if (act === 'value') {
+      try {
+        await Api.call('setValueScoring', { testId: s.testId, on: !s.valueScoring });
+        refreshLobby(true);
+      } catch (x) { toast(x.message); }
+      return;
+    }
     if (act === 'bowls') {
       if (s.bowlsReady && !confirm('Shuffle the bowl letters again? If you have already labelled the bowls, you will need to redo them.')) return;
       b.disabled = true;
@@ -702,9 +723,52 @@
     });
   }
 
+  // ─── Prices ──────────────────────────────────────────────────────────────
+  // items: [{ productId, title, sub, price: { price, qty, shop } | null }]
+  function openPricesDialog(testId, items, onDone) {
+    openDialog({
+      title: 'Prices',
+      ok: 'Save prices',
+      wide: true,
+      body: `
+        <p class="muted">What each one cost, so everyone can see it (and the price each) when judging value. Leave any you don't know blank.</p>
+        <ul class="price-list">${items.map((it, i) => `
+          <li>
+            <strong>${esc(it.title)}</strong>${it.sub ? `<span class="muted">${esc(it.sub)}</span>` : ''}
+            <input type="hidden" name="pid${i}" value="${esc(it.productId)}">
+            <div class="price-row">
+              <label>Price (£)<input name="price${i}" inputmode="decimal" placeholder="1.85" value="${it.price ? it.price.price.toFixed(2) : ''}"></label>
+              <label>How many<input name="qty${i}" inputmode="numeric" placeholder="6" value="${it.price && it.price.qty ? it.price.qty : ''}"></label>
+              <label>Shop<input name="shop${i}" maxlength="40" placeholder="Aldi" value="${esc(it.price ? it.price.shop : '')}"></label>
+            </div>
+          </li>`).join('')}
+        </ul>`,
+      onOk: async f => {
+        const list = items.map((_, i) => ({
+          productId: f.get('pid' + i), price: f.get('price' + i), qty: f.get('qty' + i), shop: f.get('shop' + i)
+        }));
+        await Api.call('setPrices', { testId, list });
+        toast('Prices saved');
+        if (onDone) onDone();
+      }
+    });
+  }
+
   // ─── Live tasting ────────────────────────────────────────────────────────
   const NICE_LABELS = ['Never again', 'Not for me', "It's fine", 'Really good', 'I want the whole bag'];
   const AUTH_LABELS = ['Nothing like it', 'A faint hint', 'Getting there', 'Very close', 'Exactly as promised'];
+  const VALUE_LABELS = ['Daylight robbery', 'Overpriced', 'Fair enough', 'Good value', 'An absolute bargain'];
+
+  // Money: 31p or £1.85, and "£1.85 for 6 (31p each), Aldi"
+  const fmtMoney = v => (v < 1 ? `${Math.round(v * 100)}p` : `£${v.toFixed(2)}`);
+  const unitCost = pr => (pr && pr.qty ? pr.price / pr.qty : pr ? pr.price : null);
+  const priceLine = pr => {
+    if (!pr) return '';
+    let t = fmtMoney(pr.price);
+    if (pr.qty && pr.qty > 1) t += ` for ${pr.qty} (${fmtMoney(pr.price / pr.qty)} each)`;
+    if (pr.shop) t += `, ${pr.shop}`;
+    return t;
+  };
   const INSPIRATION = [
     'summer rain', 'a damp tent', "grandma's handbag", 'a hint of regret', 'wet dog', 'bonfire night',
     'the seaside', 'cardboard', 'old pennies', 'christmas morning', 'school dinners', 'burnt toast',
@@ -770,6 +834,7 @@
           <h2>${esc(r.name)}</h2>
           <p class="muted">${esc(r.manufacturer)}${r.vintage ? ', ' + esc(r.vintage) : ''}</p>
           ${r.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(r.description)}</p>` : ''}
+          ${r.price ? `<p class="price-tag">💷 ${esc(priceLine(r.price))}</p>` : ''}
         </div>`;
     }
 
@@ -794,6 +859,7 @@
     const field = nice ? 'niceness' : 'authenticity';
     live.form = {
       field, half: s.halfPoints, value: m[field],
+      withValue: !nice && s.valueScoring, money: m.value,
       labels: nice ? NICE_LABELS : AUTH_LABELS,
       notes: [...(nice ? m.notesBlind : m.notesRevealed)]
     };
@@ -803,6 +869,11 @@
       ${!nice && m.niceness != null ? `<p class="your-nice">You gave it ${fmtScore(m.niceness)} for niceness.</p>` : ''}
       <div class="stars" id="stars" role="group" aria-label="${nice ? 'Niceness' : 'Authenticity'} score"></div>
       <p class="star-label" id="star-label"></p>
+      ${!nice && s.valueScoring ? `
+        <h2 class="value-q">💷 Was it good value?</h2>
+        <p class="muted">${s.reveal && s.reveal.price ? `It cost ${esc(priceLine(s.reveal.price))}.` : 'Think about what it costs.'}</p>
+        <div class="stars" id="stars-money" role="group" aria-label="Value for money score"></div>
+        <p class="star-label" id="star-label-money"></p>` : ''}
 
       <div class="notes-field">
         <label for="note-input">Notes of… <span class="hint">${nice ? 'What can you taste? Silly is good.' : 'Anything else, now you know?'}</span></label>
@@ -821,8 +892,27 @@
       <button class="btn btn--wide" type="button" id="score-send">${m[field] != null ? 'Update my score' : 'Send my score'}</button>
       <p class="sent" id="score-sent" role="status">${m[field] != null ? '✓ Sent. You can change it until the organiser moves on.' : ''}</p>`;
     renderStars();
+    renderMoneyStars();
     renderNoteChips();
     fillVocab();
+  }
+
+  function renderMoneyStars() {
+    const f = live.form;
+    const box = $('#stars-money');
+    if (!box || !f.withValue) return;
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
+      const fill = f.money >= i ? 100 : f.money >= i - 0.5 ? 50 : 0;
+      const hits = f.half
+        ? `<button type="button" class="star__hit star__hit--l" data-mv="${i - 0.5}" aria-label="${fmtScore(i - 0.5)} stars"></button>
+           <button type="button" class="star__hit star__hit--r" data-mv="${i}" aria-label="${i} stars"></button>`
+        : `<button type="button" class="star__hit" data-mv="${i}" aria-label="${plural(i, 'star')}"></button>`;
+      html += `<span class="star" style="--fill:${fill}%"><span class="star__glyph" aria-hidden="true">★</span>${hits}</span>`;
+    }
+    box.innerHTML = html;
+    $('#star-label-money').textContent = f.money
+      ? `${fmtScore(f.money)} ${f.money > 1 ? 'stars' : 'star'}: ${labelFor(f.money, VALUE_LABELS)}` : 'Tap the stars';
   }
 
   function renderStars() {
@@ -866,6 +956,11 @@
   }
 
   $('#score-panel').addEventListener('click', e => {
+    const mv = e.target.closest('[data-mv]');
+    if (mv) {
+      live.form.money = Number(mv.dataset.mv);
+      return renderMoneyStars();
+    }
     const star = e.target.closest('[data-v]');
     if (star) {
       live.form.value = Number(star.dataset.v);
@@ -900,12 +995,14 @@
   async function sendScore() {
     const f = live.form;
     if (!f.value) return toast('Tap the stars first');
+    if (f.withValue && !f.money) return toast('Give it a value for money score too');
     const pending = $('#note-input').value;
     if (pending.trim()) { addNote(pending); $('#note-input').value = ''; }
 
     const s = lobby.test;
     const payload = { testId: s.testId, sampleNo: s.current, notes: f.notes, comment: $('#comment').value };
     payload[f.field] = f.value;
+    if (f.withValue) payload.value = f.money;
     if ($('#guess')) payload.guess = $('#guess').value;
 
     const btn = $('#score-send');
@@ -1042,7 +1139,7 @@
           ${finished ? `<span class="sofar__rank">${medal(i)}</span>` : `<span class="sofar__num">${r.sampleNo}</span>`}
           <span class="pick__pic">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(r.typeIcon || '🍽️')}</span>
           <span class="pick__text"><strong>${esc(r.name)}</strong><span>${esc(r.manufacturer)}${r.vintage ? ', ' + esc(r.vintage) : ''}</span></span>
-          <span class="sofar__scores"><span title="Niceness">😋 ${fmtAvg(r.niceness)}</span><span title="Authenticity">🎯 ${fmtAvg(r.authenticity)}</span></span>
+          <span class="sofar__scores"><span title="Niceness">😋 ${fmtAvg(r.niceness)}</span><span title="Authenticity">🎯 ${fmtAvg(r.authenticity)}</span>${r.value != null ? `<span title="Value">💷 ${fmtAvg(r.value)}</span>` : ''}</span>
         </li>`).join('')}
       </ul>
       ${finished ? `<button class="btn btn--wide" type="button" id="full-results" data-id="${esc(s.testId)}">See the full results</button>` : ''}`;
@@ -1151,6 +1248,8 @@
       ${canConvert ? `
         <p class="muted">Turn this into an open tasting so more people can add scores, and you can add more products. Everyone's scores so far are kept.</p>
         <button class="btn btn--ghost" type="button" data-res-admin="convert">Turn into an open tasting</button>` : ''}
+      <p class="muted">Add or correct what each product cost. Prices show on the results and in Reviews.</p>
+      <button class="btn btn--ghost" type="button" data-res-admin="prices">Set prices</button>
       <p class="muted">Deleting removes this test and all its scores, notes and guesses for good. The products stay in your library.</p>
       <button class="btn btn--ghost btn--danger" type="button" data-res-admin="delete">Delete this test</button>`;
   }
@@ -1167,6 +1266,11 @@
         openOpenTasting(t.testId);
       } catch (x) { toast(x.message); }
     }
+    if (b.dataset.resAdmin === 'prices') {
+      return openPricesDialog(t.testId, results.stats.samples.map(x => ({
+        productId: x.productId, title: x.name, sub: [x.manufacturer, x.vintage].filter(Boolean).join(', '), price: x.price
+      })), () => openResults(t.testId, results.from));
+    }
     if (b.dataset.resAdmin === 'delete') {
       if (!confirm(`Delete "${t.name}" and all its scores? This can't be undone.`)) return;
       try {
@@ -1182,7 +1286,7 @@
     const key = results.sort;
     const list = [...results.stats.samples].sort((a, b) => (b[key] ?? -1) - (a[key] ?? -1));
     const medal = i => ['🥇', '🥈', '🥉'][i] || String(i + 1);
-    const tabs = [['total', 'Overall'], ['nice', 'Niceness'], ['auth', 'Authenticity']];
+    const tabs = [['total', 'Overall'], ['nice', 'Niceness'], ['auth', 'Authenticity']].concat(results.stats.hasValue ? [['value', 'Value']] : []);
     $('#res-ranking').innerHTML = `
       <h2>Ranking</h2>
       <div class="chips" role="group" aria-label="Rank by">${tabs.map(([k, l]) =>
@@ -1192,11 +1296,12 @@
           <span class="rank-row__pos">${medal(i)}</span>
           ${picHTML(s)}
           <span class="rank-row__main">
-            <strong>${esc(s.name)}</strong>
-            <span class="rank-row__sub">${esc(s.manufacturer)}${s.vintage ? ', ' + esc(s.vintage) : ''}</span>
+            <strong>${esc(s.label)}</strong>
+            <span class="rank-row__sub">${esc(s.manufacturer)}${s.vintage ? ', ' + esc(s.vintage) : ''}${s.price ? `<br>💷 ${esc(priceLine(s.price))}` : ''}</span>
             <span class="rank-row__bars">
               <span class="rank-row__bar">😋 ${bar(s.nice, 'bar__fill--n')}<b>${fmtAvg(s.nice)}</b></span>
               <span class="rank-row__bar">🎯 ${bar(s.auth, 'bar__fill--a')}<b>${fmtAvg(s.auth)}</b></span>
+              ${s.value != null ? `<span class="rank-row__bar">💷 ${bar(s.value, 'bar__fill--v')}<b>${fmtAvg(s.value)}</b></span>` : ''}
             </span>
           </span>
         </button></li>`).join('')}
@@ -1218,7 +1323,7 @@
     s.notes.forEach(n => { noteCounts[n.note] = (noteCounts[n.note] || 0) + 1; });
     const cloud = Object.keys(noteCounts).map(word => ({ word, count: noteCounts[word] }));
     openDialog({
-      title: s.name,
+      title: s.label,
       ok: 'Done',
       wide: true,
       noCancel: true,
@@ -1227,15 +1332,16 @@
           ${picHTML(s, 'detail-head__pic')}
           <div>
             <p class="muted">${esc(s.manufacturer)}${s.vintage ? ', ' + esc(s.vintage) : ''}. Sample ${s.sampleNo}${s.bowl ? `, bowl ${esc(s.bowl)}` : ''}.</p>
-            <p class="detail-head__scores">😋 ${fmtAvg(s.nice)} &nbsp; 🎯 ${fmtAvg(s.auth)}</p>
+            <p class="detail-head__scores">😋 ${fmtAvg(s.nice)} &nbsp; 🎯 ${fmtAvg(s.auth)}${s.value != null ? ` &nbsp; 💷 ${fmtAvg(s.value)}` : ''}</p>
           </div>
         </div>
         ${s.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(s.description)}</p>` : ''}
+        ${s.price ? `<p class="price-tag">💷 ${esc(priceLine(s.price))}</p>` : ''}
         <ul class="detail-scores">${rows.map(r => {
           const u = userById(r.userId);
           return `<li>
             <span class="detail-scores__who">${esc(u.emoji)} ${esc(u.displayName)}</span>
-            <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+            <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}${r.value != null ? ` &nbsp; 💷 ${fmtScore(r.value)}` : ''}</span>
             ${r.guess ? `<span class="detail-scores__extra">Guessed “${esc(r.guess)}”${r.guessCorrect === true ? ' ✅' : r.guessCorrect === false ? ' ❌' : ''}</span>` : ''}
             ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
           </li>`;
@@ -1252,7 +1358,7 @@
       <h2>Awards</h2>
       ${awards.length ? `<div class="awards">${awards.map(a => {
         const who = a.kind === 'product'
-          ? `${esc(a.sample.name)}`
+          ? `${esc(a.sample.label)}`
           : `${esc(a.taster.emoji)} ${esc(a.taster.displayName)}`;
         return `<div class="award">
           <span class="award__icon" aria-hidden="true">${a.icon}</span>
@@ -1290,7 +1396,7 @@
       <p class="muted">Top right is tasty and true to the packet. Top left is true but not nice. Bottom right is a happy accident.</p>
       <div class="chart-box chart-box--square"><canvas id="chart-scatter" aria-label="Niceness against authenticity for each product" role="img"></canvas></div>
       <h3 class="org-sub">Product by product</h3>
-      <div class="chart-box" style="height:${Math.max(220, st.samples.length * 46 + 70)}px"><canvas id="chart-bars" aria-label="Average niceness and authenticity per product" role="img"></canvas></div>
+      <div class="chart-box" style="height:${Math.max(220, st.samples.length * (st.hasValue ? 62 : 46) + 70)}px"><canvas id="chart-bars" aria-label="Average niceness and authenticity per product" role="img"></canvas></div>
       <h3 class="org-sub">Every star given</h3>
       <div class="chart-box chart-box--pie"><canvas id="chart-pie" aria-label="How often each score was given" role="img"></canvas></div>`;
 
@@ -1306,7 +1412,7 @@
       type: 'scatter',
       data: {
         datasets: scored.map((s, i) => ({
-          label: short(s.name),
+          label: short(s.label),
           data: [{ x: s.nice, y: s.auth }],
           backgroundColor: PALETTE[i % PALETTE.length],
           pointRadius: 9,
@@ -1343,11 +1449,11 @@
     results.charts.push(new Chart($('#chart-bars'), {
       type: 'bar',
       data: {
-        labels: st.samples.map(s => short(s.name)),
+        labels: st.samples.map(s => short(s.label)),
         datasets: [
           { label: 'Niceness', data: st.samples.map(s => s.nice), backgroundColor: c.red, borderRadius: 4 },
           { label: 'Authenticity', data: st.samples.map(s => s.auth), backgroundColor: c.green, borderRadius: 4 }
-        ]
+        ].concat(st.hasValue ? [{ label: 'Value', data: st.samples.map(s => s.value), backgroundColor: c.star, borderRadius: 4 }] : [])
       },
       options: {
         indexAxis: 'y',
@@ -1487,7 +1593,7 @@
         <h3 class="org-sub">🧠 Great minds</h3>
         <p class="muted">Tasted blind, and came up with the same note.</p>
         <ul class="great-minds">${[...st.greatMinds].sort((a, b) => b.userIds.length - a.userIds.length).slice(0, 8).map(g => `
-          <li><strong>“${esc(g.note)}”</strong> ${esc(listNames(g.userIds.map(userById)))} on ${esc(g.sample.name)}</li>`).join('')}
+          <li><strong>“${esc(g.note)}”</strong> ${esc(listNames(g.userIds.map(userById)))} on ${esc(g.sample.label)}</li>`).join('')}
         </ul>` : ''}`;
   }
 
@@ -1548,6 +1654,8 @@
       total: (a, b) => rTotal(b) - rTotal(a),
       nice: (a, b) => (b.nice ?? -1) - (a.nice ?? -1),
       auth: (a, b) => (b.auth ?? -1) - (a.auth ?? -1),
+      value: (a, b) => (b.value ?? -1) - (a.value ?? -1),
+      cheap: (a, b) => (unitCost(a.price) ?? 1e9) - (unitCost(b.price) ?? 1e9),
       mine: (a, b) => myTotal(b) - myTotal(a),
       recent: (a, b) => String(b.lastTasted).localeCompare(String(a.lastTasted)),
       name: (a, b) => a.name.localeCompare(b.name)
@@ -1567,8 +1675,9 @@
             <span class="review-card__body">
               <strong>${esc(p.name)}</strong>
               <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
-              <span class="review-card__scores"><span>😋 <b>${fmtAvg(p.nice)}</b></span><span>🎯 <b>${fmtAvg(p.auth)}</b></span></span>
-              <span class="review-card__mine">${p.mine ? `${verdict(p.mine)}: 😋 ${fmtAvg(p.mine.nice)} 🎯 ${fmtAvg(p.mine.auth)}` : "You haven't tasted it"}</span>
+              <span class="review-card__scores"><span>😋 <b>${fmtAvg(p.nice)}</b></span><span>🎯 <b>${fmtAvg(p.auth)}</b></span>${p.value != null ? `<span>💷 <b>${fmtAvg(p.value)}</b></span>` : ''}</span>
+              ${p.price ? `<span class="review-card__price">${esc(priceLine(p.price))}</span>` : ''}
+              <span class="review-card__mine">${p.mine ? `${verdict(p.mine)}: 😋 ${fmtAvg(p.mine.nice)} 🎯 ${fmtAvg(p.mine.auth)}${p.mine.value != null ? ` 💷 ${fmtAvg(p.mine.value)}` : ''}` : "You haven't tasted it"}</span>
               <span class="review-card__meta">${plural(p.appearances.length, 'test')}, last on ${esc(fmtDate(p.lastTasted))}</span>
             </span>
           </button>
@@ -1646,7 +1755,7 @@
           <span class="detail-head__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" referrerpolicy="no-referrer">` : esc(t.icon)}</span>
           <div>
             <p class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}${t.name ? '. ' + esc(t.icon + ' ' + t.name) : ''}</p>
-            <p class="detail-head__scores">😋 ${fmtAvg(p.nice)} &nbsp; 🎯 ${fmtAvg(p.auth)}</p>
+            <p class="detail-head__scores">😋 ${fmtAvg(p.nice)} &nbsp; 🎯 ${fmtAvg(p.auth)}${p.value != null ? ` &nbsp; 💷 ${fmtAvg(p.value)}` : ''}</p>
             <p class="muted">${plural(p.ratings, 'rating')}${p.mine ? `. ${verdict(p.mine)}` : ''}</p>
           </div>
         </div>
@@ -1656,7 +1765,8 @@
         <ul class="appearances">${p.appearances.map(a => `
           <li>
             <span><strong>${esc(a.testName)}</strong><span class="muted">${esc(fmtDate(a.testDate))}${a.source === 'paper' ? ', from paper' : a.source === 'open' ? ', open tasting' : ''}</span></span>
-            <span class="appearances__scores">😋 ${fmtAvg(a.nice)} 🎯 ${fmtAvg(a.auth)}</span>
+            <span class="appearances__scores">😋 ${fmtAvg(a.nice)} 🎯 ${fmtAvg(a.auth)}${a.value != null ? ` 💷 ${fmtAvg(a.value)}` : ''}</span>
+            ${a.price ? `<span class="appearances__price">💷 ${esc(priceLine(a.price))}</span>` : ''}
             <button type="button" class="link" data-open-test="${esc(a.testId)}">Results</button>
           </li>`).join('')}
         </ul>
@@ -1673,6 +1783,7 @@
             <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}</span>
             <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
             ${p.appearances.length > 1 ? `<span class="detail-scores__extra">${esc(r.testName)}</span>` : ''}
+            ${r.value != null ? `<span class="detail-scores__extra">💷 Value: ${fmtScore(r.value)}</span>` : ''}
             ${r.guess ? `<span class="detail-scores__extra">Guessed “${esc(r.guess)}”${r.guessCorrect === true ? ' ✅' : r.guessCorrect === false ? ' ❌' : ''}</span>` : ''}
             ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
           </li>`).join('')}
@@ -1703,12 +1814,15 @@
       ['Overall', p => (rTotal(p) < 0 ? null : rTotal(p) / 2), true],
       ['😋 Nice', p => p.nice, true],
       ['🎯 True', p => p.auth, true],
+      ['💷 Value', p => p.value, true],
       ['You 😋', p => (p.mine ? p.mine.nice : null), true],
       ['You 🎯', p => (p.mine ? p.mine.auth : null), true],
+      ['You 💷', p => (p.mine ? p.mine.value : null), true],
+      ['Each', p => unitCost(p.price), 'money'],
       ['Ratings', p => p.ratings, false],
       ['Tests', p => p.appearances.length, false]
     ];
-    const cell = (v, best, isScore) => `<td${best ? ' class="best"' : ''}>${v == null ? '–' : isScore ? fmtAvg(v) : v}</td>`;
+    const cell = (v, best, kind) => `<td${best ? ' class="best"' : ''}>${v == null ? '–' : kind === 'money' ? fmtMoney(v) : kind ? fmtAvg(v) : v}</td>`;
 
     openDialog({
       title: 'Compare',
@@ -1724,15 +1838,16 @@
                 <span>${esc(p.name)}</span>
                 <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
               </th>`).join('')}</tr></thead>
-            <tbody>${rows.map(([label, fn, isScore]) => {
+            <tbody>${rows.filter(([, fn]) => picks.some(p => fn(p) != null)).map(([label, fn, kind]) => {
               const vals = picks.map(fn);
-              const top = Math.max(...vals.filter(v => v != null));
-              return `<tr><th scope="row">${label}</th>${vals.map(v => cell(v, isScore && v != null && v === top && vals.filter(x => x != null).length > 1, isScore)).join('')}</tr>`;
+              const known = vals.filter(v => v != null);
+              const top = kind === 'money' ? Math.min(...known) : Math.max(...known);
+              return `<tr><th scope="row">${label}</th>${vals.map(v => cell(v, kind && v != null && v === top && known.length > 1, kind)).join('')}</tr>`;
             }).join('')}
             </tbody>
           </table>
         </div>
-        <p class="muted">Overall is the average of niceness (😋) and authenticity (🎯). “You” is your own score. The best in each row is highlighted.</p>
+        <p class="muted">Overall is the average of niceness (😋) and authenticity (🎯). 💷 is value for money, and “Each” is the price of one. “You” is your own score. The best in each row is highlighted.</p>
         ${typeof window.Chart !== 'undefined' ? '<div class="chart-box"><canvas id="chart-compare" role="img" aria-label="Niceness and authenticity compared"></canvas></div>' : ''}`,
       onOpen: () => {
         if (typeof window.Chart === 'undefined') return;
@@ -1748,7 +1863,7 @@
             datasets: [
               { label: 'Niceness', data: picks.map(p => p.nice), backgroundColor: c.red, borderRadius: 4 },
               { label: 'Authenticity', data: picks.map(p => p.auth), backgroundColor: c.green, borderRadius: 4 }
-            ]
+            ].concat(picks.some(p => p.value != null) ? [{ label: 'Value', data: picks.map(p => p.value), backgroundColor: c.star, borderRadius: 4 }] : [])
           },
           options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
         });
@@ -1816,6 +1931,7 @@
         <label>Name<input name="name" maxlength="60" value="${esc(one ? suggest(one) : '')}" placeholder="Mince Pie Season 2026"></label>
         <label>Started on<input name="testDate" type="date" value="${iso}"></label>
         <label class="check"><input type="checkbox" name="halfPoints" checked> Allow half points</label>
+        <label class="check"><input type="checkbox" name="valueScoring" checked> Score value for money</label>
         ${productPicker(preselect)}
         <button type="button" class="link" id="open-new-product">Not in the library? Add a new product</button>`,
       onOpen: body => {
@@ -1843,7 +1959,7 @@
         if (!String(f.get('name') || '').trim()) throw new Error('Give it a name.');
         const r = await Api.call('createOpenTasting', {
           name: f.get('name'), testDate: f.get('testDate'),
-          halfPoints: f.get('halfPoints') === 'on', productIds: ids
+          halfPoints: f.get('halfPoints') === 'on', valueScoring: f.get('valueScoring') === 'on', productIds: ids
         });
         toast('Open tasting started. Everyone can rate now');
         openOpenTasting(r.testId);
@@ -1907,6 +2023,7 @@
       if (item && d.isOpen) {
         renderOpenStars('nice');
         renderOpenStars('auth');
+        if (d.valueScoring) renderOpenStars('value');
         renderOpenChips();
         if (live.vocab) fillOpenVocab();
         else Api.call('noteVocab').then(v => { live.vocab = v; fillOpenVocab(); }).catch(() => {});
@@ -1924,8 +2041,8 @@
         <li>
           <span class="sofar__rank">${['🥇', '🥈', '🥉'][i] || i + 1}</span>
           <span class="pick__pic">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(r.typeIcon || '🍽️')}</span>
-          <span class="pick__text"><strong>${esc(openTitle(r))}</strong><span>${plural(r.ratings, 'rating')}</span></span>
-          <span class="sofar__scores"><span>😋 ${fmtAvg(r.nice)}</span><span>🎯 ${fmtAvg(r.auth)}</span></span>
+          <span class="pick__text"><strong>${esc(openTitle(r))}</strong><span>${plural(r.ratings, 'rating')}${r.price ? ', ' + esc(fmtMoney(unitCost(r.price))) + (r.price.qty > 1 ? ' each' : '') : ''}</span></span>
+          <span class="sofar__scores"><span>😋 ${fmtAvg(r.nice)}</span><span>🎯 ${fmtAvg(r.auth)}</span>${r.value != null ? `<span>💷 ${fmtAvg(r.value)}</span>` : ''}</span>
         </li>`).join('')}
       </ul>
       <button class="btn btn--ghost btn--wide" type="button" id="open-results">Full results and stats</button>` : '';
@@ -1937,6 +2054,11 @@
       ? `<h2>Admin</h2>
          <p class="muted">Someone turned up with another pack? Add it here and everyone can rate it.</p>
          <button class="btn" type="button" data-open-set="add">Add a product</button>
+         <p class="muted">Record what each one cost, so everyone sees the price (and price each). Value for money scoring is <strong>${d.valueScoring ? 'on' : 'off'}</strong>.</p>
+         <div class="row row--tight">
+           <button class="btn btn--ghost" type="button" data-open-set="prices">Set prices</button>
+           <button class="btn btn--ghost" type="button" data-open-set="value">Turn value scoring ${d.valueScoring ? 'off' : 'on'}</button>
+         </div>
          <p class="muted">Close the tasting once everyone has had a go. You can reopen it later.</p>
          <button class="btn btn--ghost" type="button" data-open-set="close">Close tasting</button>`
       : `<h2>Admin</h2><p class="muted">This tasting is closed, so nobody can add scores.</p>
@@ -1945,7 +2067,7 @@
 
   function itemHTML(it) {
     const d = openT.data;
-    const done = it.mine && it.mine.niceness != null && it.mine.authenticity != null;
+    const done = it.mine && it.mine.niceness != null && it.mine.authenticity != null && (!d.valueScoring || it.mine.value != null);
     const open = openT.expanded === it.sampleNo;
     const cloud = Object.keys(it.notes).map(word => ({ word, count: it.notes[word] })).sort((a, b) => b.count - a.count).slice(0, 25);
     return `
@@ -1955,9 +2077,10 @@
           <span class="open-item__text">
             <strong>${esc(openTitle(it))}</strong>
             ${openSub(it) ? `<span class="muted">${esc(openSub(it))}</span>` : ''}
-            <span class="open-item__avg">${it.ratings ? `😋 ${fmtAvg(it.nice)} 🎯 ${fmtAvg(it.auth)} from ${plural(it.ratings, 'rating')}` : 'No ratings yet'}</span>
+            ${it.price ? `<span class="open-item__price">💷 ${esc(priceLine(it.price))}</span>` : ''}
+            <span class="open-item__avg">${it.ratings ? `😋 ${fmtAvg(it.nice)} 🎯 ${fmtAvg(it.auth)}${it.value != null ? ` 💷 ${fmtAvg(it.value)}` : ''} from ${plural(it.ratings, 'rating')}` : 'No ratings yet'}</span>
           </span>
-          <span class="open-item__status${done ? ' open-item__status--done' : ''}">${done ? `✓ ${fmtScore(it.mine.niceness)} / ${fmtScore(it.mine.authenticity)}` : d.isOpen ? 'To rate' : ''}</span>
+          <span class="open-item__status${done ? ' open-item__status--done' : ''}">${done ? `✓ ${[it.mine.niceness, it.mine.authenticity].concat(d.valueScoring ? [it.mine.value] : []).map(fmtScore).join(' / ')}` : d.isOpen ? (it.mine ? 'Finish' : 'To rate') : ''}</span>
         </button>
         ${open ? `
           <div class="open-item__body">
@@ -1969,6 +2092,11 @@
               <h3 class="org-sub">🎯 Does it taste like the packet says?</h3>
               <div class="stars" data-group="auth"></div>
               <p class="star-label" data-label="auth"></p>
+              ${d.valueScoring ? `
+                <h3 class="org-sub">💷 Was it good value?</h3>
+                ${it.price ? `<p class="muted">It cost ${esc(priceLine(it.price))}.</p>` : ''}
+                <div class="stars" data-group="value"></div>
+                <p class="star-label" data-label="value"></p>` : ''}
               <div class="notes-field">
                 <label for="open-note-input">Notes of… <span class="hint">What can you taste? Silly is good.</span></label>
                 <div class="note-chips-edit" id="open-note-chips"></div>
@@ -1986,7 +2114,7 @@
               <ul class="detail-scores">${it.scores.map(r => `
                 <li>
                   <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}${r.isMe ? ' (you)' : ''}</span>
-                  <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+                  <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}${r.value != null ? ` &nbsp; 💷 ${fmtScore(r.value)}` : ''}</span>
                   ${r.at ? `<span class="detail-scores__extra">${esc(fmtDate(new Date(r.at).toISOString().slice(0, 10)))}</span>` : ''}
                   ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
                 </li>`).join('')}
@@ -2001,7 +2129,7 @@
   function renderOpenStars(group) {
     const half = openT.data.halfPoints;
     const value = openT.form[group];
-    const labels = group === 'nice' ? NICE_LABELS : AUTH_LABELS;
+    const labels = group === 'nice' ? NICE_LABELS : group === 'value' ? VALUE_LABELS : AUTH_LABELS;
     let html = '';
     for (let i = 1; i <= 5; i++) {
       const fill = value >= i ? 100 : value >= i - 0.5 ? 50 : 0;
@@ -2043,6 +2171,7 @@
       openT.form = {
         nice: it.mine ? it.mine.niceness : null,
         auth: it.mine ? it.mine.authenticity : null,
+        value: it.mine ? it.mine.value : null,
         notes: it.mine ? [...it.mine.notes] : []
       };
     }
@@ -2092,6 +2221,19 @@
     if (set) {
       const act = set.dataset.openSet;
       if (act === 'add') return addToOpenTasting();
+      if (act === 'prices') {
+        return openPricesDialog(openT.testId, openT.data.items.map(i => ({
+          productId: i.productId, title: openTitle(i), sub: openSub(i), price: i.price
+        })), () => openOpenTasting(openT.testId, true));
+      }
+      if (act === 'value') {
+        try {
+          await Api.call('setValueScoring', { testId: openT.testId, on: !openT.data.valueScoring });
+          toast(openT.data.valueScoring ? 'Value scoring off' : 'Value scoring on');
+          openOpenTasting(openT.testId, true);
+        } catch (x) { toast(x.message); }
+        return;
+      }
       if (act === 'close' && !confirm('Close this tasting? Nobody will be able to add or change scores.')) return;
       try {
         await Api.call('setOpenTasting', { testId: openT.testId, open: act === 'open' });
@@ -2104,6 +2246,7 @@
     if (e.target.closest('#open-send')) {
       const f = openT.form;
       if (!f.nice || !f.auth) return toast('Give it both scores first');
+      if (openT.data.valueScoring && !f.value) return toast('Give it a value for money score too');
       const pending = $('#open-note-input').value;
       if (pending.trim()) { addOpenNote(pending); $('#open-note-input').value = ''; }
       const btn = $('#open-send');
@@ -2112,11 +2255,13 @@
       try {
         await Api.call('submitOpenScore', {
           testId: openT.testId, sampleNo: openT.expanded, niceness: f.nice, authenticity: f.auth,
+          value: openT.data.valueScoring ? f.value : undefined,
           comment: $('#open-comment').value, notes: f.notes
         });
         live.vocab = null;
         const d = openT.data;
-        const wasDone = d.items.find(i => i.sampleNo === openT.expanded).mine;
+        const it0 = d.items.find(i => i.sampleNo === openT.expanded);
+        const wasDone = it0.mine && it0.mine.niceness != null && it0.mine.authenticity != null && (!d.valueScoring || it0.mine.value != null);
         const left = d.items.length - d.myCount - (wasDone ? 0 : 1);
         toast(left > 0 ? `Saved. ${left} more to go!` : 'Saved. You’ve rated them all!');
         openT.expanded = null;
@@ -2149,8 +2294,8 @@
     const picker = productPicker([], true);
     state.products = all;
 
-    const add = async productId => {
-      await Api.call('addOpenProduct', { testId: openT.testId, productId });
+    const add = async (productId, price = {}) => {
+      await Api.call('addOpenProduct', Object.assign({ testId: openT.testId, productId }, price));
       toast('Added. Everyone can rate it now');
       openOpenTasting(openT.testId);
     };
@@ -2159,7 +2304,14 @@
       title: 'Add a product',
       ok: 'Add it',
       wide: true,
-      body: `${picker}<button type="button" class="link" id="open-add-new">Not in the library? Add a new product</button>`,
+      body: `${picker}
+        <button type="button" class="link" id="open-add-new">Not in the library? Add a new product</button>
+        <div class="price-row price-row--add">
+          <label>Price (£)<input name="price" inputmode="decimal" placeholder="1.85"></label>
+          <label>How many<input name="qty" inputmode="numeric" placeholder="6"></label>
+          <label>Shop<input name="shop" maxlength="40" placeholder="Aldi"></label>
+        </div>
+        <p class="muted">Price is optional. You can add or change it later with Set prices.</p>`,
       onOpen: body => {
         wirePicker(body);
         body.querySelector('#open-add-new').addEventListener('click', () => {
@@ -2170,7 +2322,7 @@
       },
       onOk: async f => {
         if (!f.get('productId')) throw new Error('Pick a product.');
-        await add(f.get('productId'));
+        await add(f.get('productId'), { price: f.get('price'), qty: f.get('qty'), shop: f.get('shop') });
       }
     });
   }

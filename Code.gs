@@ -5,7 +5,8 @@
  * Phase 3: creating tests, choosing products, the lobby, bowls and the bowl keeper.
  * Phase 4: live tasting rounds: bowl picking, scoring, notes, guesses, reveal.
  * Phase 5: results, awards and stats, past tests, product reviews.
- * Open tastings: one known product, scored by anyone, whenever they like.
+ * Open tastings: known products, scored by anyone, whenever they like.
+ * Value for money: optional third score, with prices recorded per tasting.
  *
  * Bind this script to the "Taste Test" spreadsheet (Extensions → Apps Script),
  * run setup() once, then deploy as a web app (Execute as: Me, Access: Anyone).
@@ -19,10 +20,10 @@ const SCHEMA = {
   Sessions:         ['token', 'userId', 'created', 'expires'],
   Types:            ['typeId', 'name', 'icon'],
   Products:         ['productId', 'productLine', 'name', 'manufacturer', 'typeId', 'vintage', 'description', 'photoUrl', 'created', 'createdBy'],
-  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt', 'keeperId', 'bowlsReady'],
-  TestProducts:     ['testId', 'sampleNo', 'productId', 'order', 'bowl', 'chosenAt', 'revealedAt', 'closedAt'],
+  Tests:            ['testId', 'name', 'testDate', 'organiserId', 'status', 'halfPoints', 'currentSample', 'phase', 'phaseOpenedAt', 'version', 'created', 'source', 'startedAt', 'finishedAt', 'keeperId', 'bowlsReady', 'valueScoring'],
+  TestProducts:     ['testId', 'sampleNo', 'productId', 'order', 'bowl', 'chosenAt', 'revealedAt', 'closedAt', 'price', 'qty', 'shop'],
   TestParticipants: ['testId', 'userId', 'joinedAt', 'status'],
-  Scores:           ['testId', 'sampleNo', 'userId', 'niceness', 'authenticity', 'flavourGuess', 'guessCorrect', 'comment', 'phaseOpenedAt', 'nicenessAt', 'authenticityAt'],
+  Scores:           ['testId', 'sampleNo', 'userId', 'niceness', 'authenticity', 'flavourGuess', 'guessCorrect', 'comment', 'phaseOpenedAt', 'nicenessAt', 'authenticityAt', 'value'],
   Notes:            ['testId', 'sampleNo', 'userId', 'note', 'phase', 'created'],
   Settings:         ['key', 'value']
 };
@@ -34,6 +35,7 @@ const TEXT_COLS = {
   Products: ['productLine', 'name', 'manufacturer', 'vintage', 'description'],
   Tests: ['name'],
   Scores: ['flavourGuess', 'comment'],
+  TestProducts: ['shop'],
   Notes: ['note']
 };
 
@@ -137,6 +139,8 @@ const ROUTES = {
   setOpenTasting:     { auth: 'admin', fn: setOpenTasting },
   addOpenProduct:     { auth: 'admin', fn: addOpenProduct },
   removeOpenProduct:  { auth: 'admin', fn: removeOpenProduct },
+  setPrices:          { auth: 'admin', fn: setPrices },
+  setValueScoring:    { auth: 'admin', fn: setValueScoring },
   convertToOpen:      { auth: 'admin', fn: convertToOpen },
   deleteTest:         { auth: 'admin', fn: deleteTest }
 };
@@ -426,7 +430,7 @@ function createTest(p, user) {
       testId: newId_('X'), name, testDate, organiserId: user.userId, status: 'lobby',
       halfPoints: !!p.halfPoints, currentSample: '', phase: '', phaseOpenedAt: '',
       version: now, created: now, source: 'live', startedAt: '', finishedAt: '',
-      keeperId: '', bowlsReady: false
+      keeperId: '', bowlsReady: false, valueScoring: !!p.valueScoring
     };
     appendRow_('Tests', test);
     appendRows_('TestProducts', productIds.map(id => ({ testId: test.testId, sampleNo: '', productId: id, order: '' })));
@@ -440,8 +444,13 @@ function updateTestProducts(p, user) {
   return withLock_(() => {
     const t = organisersTest_(p.testId, user, 'lobby');
     const productIds = checkProductIds_(p.productIds);
+    const old = {};
+    readTable_('TestProducts').filter(x => x.testId === t.testId).forEach(x => { old[x.productId] = x; });
     deleteWhere_('TestProducts', x => x.testId === t.testId);
-    appendRows_('TestProducts', productIds.map(id => ({ testId: t.testId, sampleNo: '', productId: id, order: '', bowl: '' })));
+    appendRows_('TestProducts', productIds.map(id => ({
+      testId: t.testId, sampleNo: '', productId: id, order: '', bowl: '',
+      price: old[id] ? old[id].price : '', qty: old[id] ? old[id].qty : '', shop: old[id] ? old[id].shop : ''
+    })));
     updateRow_('Tests', t._row, { bowlsReady: false });   // bowls need re-labelling
     bumpTest_(t);
     return true;
@@ -497,7 +506,7 @@ function getTest(p, user) {
 
   const out = {
     version, testId: t.testId, name: String(t.name), testDate: t.testDate, status: t.status,
-    halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId], isOrganiser,
+    halfPoints: isTrue_(t.halfPoints), valueScoring: isTrue_(t.valueScoring), organiser: users[t.organiserId], isOrganiser,
     amIn: parts.some(x => x.userId === user.userId),
     participants: parts.map(x => users[x.userId]).filter(Boolean),
     sampleCount: samples.length,
@@ -521,7 +530,8 @@ function getTest(p, user) {
       .map(({ x, pr }) => ({
         productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
         vintage: String(pr.vintage), photoUrl: pr.photoUrl, typeId: pr.typeId,
-        bowl: out.bowlsReady ? String(x.bowl) : ''
+        bowl: out.bowlsReady ? String(x.bowl) : '',
+        price: priceOf_(x)
       }))
       .sort((a, b) => (a.bowl.length - b.bowl.length) || a.bowl.localeCompare(b.bowl));
   }
@@ -686,6 +696,10 @@ function submitScore(p, user) {
       if (!existing || !existing.nicenessAt) patch.nicenessAt = now;   // speed counts the first answer
     } else {
       patch.authenticity = score;
+      if (isTrue_(t.valueScoring)) {
+        if (p.value === undefined || p.value === null || p.value === '') throw err_('Give it a value for money score too.');
+        patch.value = cleanScore_(p.value, half);
+      }
       if (!existing || !existing.authenticityAt) patch.authenticityAt = now;
     }
     if (existing) {
@@ -694,7 +708,7 @@ function submitScore(p, user) {
       appendRow_('Scores', Object.assign({
         testId: t.testId, sampleNo: Number(t.currentSample), userId: user.userId,
         niceness: '', authenticity: '', flavourGuess: '', guessCorrect: '', comment: '',
-        phaseOpenedAt: t.phaseOpenedAt, nicenessAt: '', authenticityAt: ''
+        phaseOpenedAt: t.phaseOpenedAt, nicenessAt: '', authenticityAt: '', value: ''
       }, patch));
     }
 
@@ -790,6 +804,7 @@ function liveState_(t, user, samples, parts, users) {
     out.mine = {
       niceness: mine && mine.niceness !== '' ? Number(mine.niceness) : null,
       authenticity: mine && mine.authenticity !== '' ? Number(mine.authenticity) : null,
+      value: mine && mine.value !== '' && mine.value !== undefined ? Number(mine.value) : null,
       guess: mine ? String(mine.flavourGuess || '') : '',
       comment: mine ? String(mine.comment || '') : '',
       notesBlind: myNotes.filter(n => n.phase === 'blind').map(n => String(n.note)),
@@ -804,7 +819,7 @@ function liveState_(t, user, samples, parts, users) {
 
     if (t.phase === 'authenticity') {
       const row = samples.find(x => Number(x.sampleNo) === cur);
-      out.reveal = row ? productInfo(products[row.productId]) : null;
+      out.reveal = row ? Object.assign(productInfo(products[row.productId]) || {}, { price: priceOf_(row) }) : null;
       if (t.organiserId === user.userId) {
         out.guesses = curScores.filter(x => x.flavourGuess).map(x => ({
           userId: x.userId, guess: String(x.flavourGuess),
@@ -824,7 +839,7 @@ function liveState_(t, user, samples, parts, users) {
       const v = sc.map(y => y[f]).filter(v => v !== '').map(Number);
       return v.length ? Math.round(v.reduce((a, b) => a + b, 0) / v.length * 100) / 100 : null;
     };
-    return Object.assign({ sampleNo: Number(x.sampleNo), bowl: String(x.bowl), niceness: avg('niceness'), authenticity: avg('authenticity') },
+    return Object.assign({ sampleNo: Number(x.sampleNo), bowl: String(x.bowl), niceness: avg('niceness'), authenticity: avg('authenticity'), value: avg('value') },
       productInfo(products[x.productId]));
   });
   return out;
@@ -921,7 +936,8 @@ function getResults(p) {
         manufacturer: String(pr.manufacturer || ''), vintage: String(pr.vintage || ''),
         description: String(pr.description || ''), photoUrl: pr.photoUrl || '',
         typeIcon: types[pr.typeId] ? types[pr.typeId].icon : '',
-        chosenAt: num(x.chosenAt), revealedAt: num(x.revealedAt)
+        chosenAt: num(x.chosenAt), revealedAt: num(x.revealedAt),
+        price: priceOf_(x)
       };
     });
 
@@ -929,7 +945,8 @@ function getResults(p) {
     sampleNo: Number(x.sampleNo), userId: x.userId,
     niceness: num(x.niceness), authenticity: num(x.authenticity),
     guess: String(x.flavourGuess || ''), guessCorrect: x.guessCorrect === '' ? null : isTrue_(x.guessCorrect),
-    comment: String(x.comment || ''), nicenessAt: num(x.nicenessAt), authenticityAt: num(x.authenticityAt)
+    comment: String(x.comment || ''), nicenessAt: num(x.nicenessAt), authenticityAt: num(x.authenticityAt),
+    value: num(x.value === undefined ? '' : x.value)
   }));
 
   const notes = readTable_('Notes').filter(x => x.testId === t.testId).map(x => ({
@@ -943,7 +960,7 @@ function getResults(p) {
   return {
     test: {
       testId: t.testId, name: String(t.name), testDate: t.testDate, source: t.source || 'live',
-      isOpen: t.status === 'open', halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
+      isOpen: t.status === 'open', halfPoints: isTrue_(t.halfPoints), valueScoring: isTrue_(t.valueScoring), organiser: users[t.organiserId] || null,
       keeper: t.keeperId ? users[t.keeperId] || null : null
     },
     samples, scores, notes,
@@ -976,28 +993,33 @@ function listReviews(p, user) {
       productId: pr.productId, name: String(pr.name), manufacturer: String(pr.manufacturer),
       vintage: String(pr.vintage), typeId: pr.typeId, productLine: String(pr.productLine || ''),
       photoUrl: pr.photoUrl, description: String(pr.description || ''),
-      appearances: [], _n: [], _a: [], _myN: [], _myA: []
+      appearances: [], _n: [], _a: [], _v: [], _myN: [], _myA: [], _myV: []
     };
     entry.appearances.push({
       testId: t.testId, testName: String(t.name), testDate: t.testDate, source: t.source || 'live',
-      nice: avg(vals(rows, 'niceness')), auth: avg(vals(rows, 'authenticity')), tasters: rows.length
+      nice: avg(vals(rows, 'niceness')), auth: avg(vals(rows, 'authenticity')), value: avg(vals(rows, 'value')),
+      tasters: rows.length, price: priceOf_(x)
     });
     entry._n = entry._n.concat(vals(rows, 'niceness'));
     entry._a = entry._a.concat(vals(rows, 'authenticity'));
+    entry._v = entry._v.concat(vals(rows, 'value'));
     const mine = rows.filter(r => r.userId === user.userId);
     entry._myN = entry._myN.concat(vals(mine, 'niceness'));
     entry._myA = entry._myA.concat(vals(mine, 'authenticity'));
+    entry._myV = entry._myV.concat(vals(mine, 'value'));
   });
 
   const list = Object.keys(byProduct).map(id => {
     const e = byProduct[id];
     e.appearances.sort((a, b) => String(b.testDate).localeCompare(String(a.testDate)));
+    const priced = e.appearances.find(a => a.price);
     const out = Object.assign({}, e, {
-      nice: avg(e._n), auth: avg(e._a), ratings: e._n.length,
-      mine: e._myN.length || e._myA.length ? { nice: avg(e._myN), auth: avg(e._myA) } : null,
-      lastTasted: e.appearances[0] ? e.appearances[0].testDate : ''
+      nice: avg(e._n), auth: avg(e._a), value: avg(e._v), ratings: e._n.length,
+      mine: e._myN.length || e._myA.length ? { nice: avg(e._myN), auth: avg(e._myA), value: avg(e._myV) } : null,
+      lastTasted: e.appearances[0] ? e.appearances[0].testDate : '',
+      price: priced ? priced.price : null
     });
-    delete out._n; delete out._a; delete out._myN; delete out._myA;
+    delete out._n; delete out._a; delete out._v; delete out._myN; delete out._myA; delete out._myV;
     return out;
   });
   return { products: list, types: readTable_('Types') };
@@ -1019,7 +1041,7 @@ function getProductReview(p) {
       out.scores.push({
         testId: t.testId, testName: String(t.name), testDate: t.testDate,
         user: users[y.userId] || { emoji: '👤', displayName: 'Someone' },
-        niceness: num(y.niceness), authenticity: num(y.authenticity),
+        niceness: num(y.niceness), authenticity: num(y.authenticity), value: num(y.value === undefined ? '' : y.value),
         guess: String(y.flavourGuess || ''), guessCorrect: y.guessCorrect === '' ? null : isTrue_(y.guessCorrect),
         comment: String(y.comment || '')
       });
@@ -1048,7 +1070,8 @@ function createOpenTasting(p, user) {
       testId: newId_('X'), name, testDate: /^\d{4}-\d{2}-\d{2}$/.test(p.testDate) ? p.testDate : today_(),
       organiserId: user.userId, status: 'open', halfPoints: !!p.halfPoints,
       currentSample: '', phase: 'open', phaseOpenedAt: now, version: now, created: now,
-      source: 'open', startedAt: now, finishedAt: '', keeperId: '', bowlsReady: false
+      source: 'open', startedAt: now, finishedAt: '', keeperId: '', bowlsReady: false,
+      valueScoring: p.valueScoring !== false
     };
     appendRow_('Tests', test);
     appendRows_('TestProducts', ids.map((id, i) => ({
@@ -1065,7 +1088,8 @@ function addOpenProduct(p) {
     const rows = readTable_('TestProducts').filter(x => x.testId === t.testId);
     if (rows.some(x => x.productId === ids[0])) throw err_("That product is already in this tasting.");
     const next = rows.reduce((m, x) => Math.max(m, Number(x.sampleNo) || 0), 0) + 1;
-    appendRow_('TestProducts', { testId: t.testId, sampleNo: next, productId: ids[0], order: next, bowl: '', chosenAt: Date.now(), revealedAt: '', closedAt: '' });
+    appendRow_('TestProducts', Object.assign({ testId: t.testId, sampleNo: next, productId: ids[0], order: next, bowl: '', chosenAt: Date.now(), revealedAt: '', closedAt: '' },
+      cleanPrice_(p)));
     bumpTest_(t);
     return true;
   });
@@ -1093,7 +1117,8 @@ function listOpenTastings(p, user) {
   return tests.map(t => {
     const rows = samples.filter(x => x.testId === t.testId).sort((a, b) => Number(a.sampleNo) - Number(b.sampleNo));
     const sc = scores.filter(x => x.testId === t.testId);
-    const done = new Set(sc.filter(x => x.userId === user.userId && x.niceness !== '' && x.authenticity !== '').map(x => Number(x.sampleNo)));
+    const needValue = isTrue_(t.valueScoring);
+    const done = new Set(sc.filter(x => x.userId === user.userId && x.niceness !== '' && x.authenticity !== '' && (!needValue || (x.value !== '' && x.value !== undefined))).map(x => Number(x.sampleNo)));
     return {
       testId: t.testId, name: String(t.name), testDate: t.testDate,
       products: rows.slice(0, 4).map(x => {
@@ -1135,15 +1160,19 @@ function getOpenTasting(p, user) {
       ratings: sc.length,
       nice: avg(sc.map(y => y.niceness).filter(v => v !== '').map(Number)),
       auth: avg(sc.map(y => y.authenticity).filter(v => v !== '').map(Number)),
+      value: avg(sc.map(y => y.value).filter(v => v !== '' && v !== undefined).map(Number)),
+      price: priceOf_(x),
       mine: mine ? {
-        niceness: num(mine.niceness), authenticity: num(mine.authenticity), comment: String(mine.comment || ''),
+        niceness: num(mine.niceness), authenticity: num(mine.authenticity), value: num(mine.value === undefined ? '' : mine.value),
+        comment: String(mine.comment || ''),
         notes: nt.filter(n => n.userId === user.userId).map(n => String(n.note))
       } : null,
       scores: sc
         .sort((a, b) => Number(b.nicenessAt || 0) - Number(a.nicenessAt || 0))
         .map(y => ({
           user: users[y.userId] || { emoji: '👤', displayName: 'Someone' }, isMe: y.userId === user.userId,
-          niceness: num(y.niceness), authenticity: num(y.authenticity), comment: String(y.comment || ''), at: num(y.nicenessAt)
+          niceness: num(y.niceness), authenticity: num(y.authenticity), value: num(y.value === undefined ? '' : y.value),
+          comment: String(y.comment || ''), at: num(y.nicenessAt)
         })),
       notes: counts
     };
@@ -1151,9 +1180,10 @@ function getOpenTasting(p, user) {
 
   return {
     testId: t.testId, name: String(t.name), testDate: t.testDate, isOpen: t.status === 'open',
-    halfPoints: isTrue_(t.halfPoints), organiser: users[t.organiserId] || null,
+    halfPoints: isTrue_(t.halfPoints), valueScoring: isTrue_(t.valueScoring), organiser: users[t.organiserId] || null,
     items,
-    myCount: items.filter(i => i.mine && i.mine.niceness !== null && i.mine.authenticity !== null).length,
+    myCount: items.filter(i => i.mine && i.mine.niceness !== null && i.mine.authenticity !== null &&
+      (!isTrue_(t.valueScoring) || i.mine.value !== null)).length,
     tasterCount: Object.keys(scores.reduce((m, x) => { m[x.userId] = 1; return m; }, {})).length
   };
 }
@@ -1170,15 +1200,19 @@ function submitOpenScore(p, user) {
     const half = isTrue_(t.halfPoints);
     const niceness = cleanScore_(p.niceness, half);
     const authenticity = cleanScore_(p.authenticity, half);
+    if (isTrue_(t.valueScoring) && (p.value === undefined || p.value === null || p.value === '')) throw err_('Give it a value for money score too.');
+    const value = isTrue_(t.valueScoring) ? cleanScore_(p.value, half) : '';
     const comment = cleanText_(p.comment, 'comment', 500, false);
     const now = Date.now();
 
     const existing = readTable_('Scores').find(x => x.testId === t.testId && Number(x.sampleNo) === sampleNo && x.userId === user.userId);
     if (existing) {
-      updateRow_('Scores', existing._row, { niceness, authenticity, comment });
+      const patch = { niceness, authenticity, comment };
+      if (value !== '') patch.value = value;
+      updateRow_('Scores', existing._row, patch);
     } else {
       appendRow_('Scores', {
-        testId: t.testId, sampleNo, userId: user.userId, niceness, authenticity,
+        testId: t.testId, sampleNo, userId: user.userId, niceness, authenticity, value,
         flavourGuess: '', guessCorrect: '', comment, phaseOpenedAt: '', nicenessAt: now, authenticityAt: now
       });
     }
@@ -1200,6 +1234,57 @@ function setOpenTasting(p) {
       : { status: 'finished', finishedAt: now, version: now });
     return true;
   });
+}
+
+// Prices are stored per test, since the same product costs different
+// amounts in different shops and years. list: [{ productId, price, qty, shop }]
+function setPrices(p) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t) throw err_('Test not found.');
+    const rows = readTable_('TestProducts').filter(x => x.testId === t.testId);
+    (Array.isArray(p.list) ? p.list : []).forEach(item => {
+      const row = rows.find(x => x.productId === item.productId);
+      if (row) updateRow_('TestProducts', row._row, cleanPrice_(item));
+    });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function setValueScoring(p) {
+  return withLock_(() => {
+    const t = findTest_(p.testId);
+    if (!t) throw err_('Test not found.');
+    if (t.source !== 'open' && t.status !== 'lobby') throw err_('Value scoring can only be changed before a blind test starts.');
+    updateRow_('Tests', t._row, { valueScoring: !!p.on });
+    bumpTest_(t);
+    return true;
+  });
+}
+
+function cleanPrice_(item) {
+  const blank = v => v === undefined || v === null || String(v).trim() === '';
+  let price = '';
+  if (!blank(item.price)) {
+    price = Math.round(Number(String(item.price).replace(/[£,\s]/g, '')) * 100) / 100;
+    if (!isFinite(price) || price < 0 || price > 10000) throw err_('That price doesn’t look right.');
+  }
+  let qty = '';
+  if (!blank(item.qty)) {
+    qty = Math.round(Number(item.qty));
+    if (!isFinite(qty) || qty < 1 || qty > 10000) throw err_('The pack size should be a whole number, like 6.');
+  }
+  return { price, qty, shop: cleanText_(item.shop, 'shop', 40, false) };
+}
+
+function priceOf_(row) {
+  if (!row || row.price === '' || row.price === undefined || row.price === null) return null;
+  return {
+    price: Number(row.price),
+    qty: row.qty === '' || row.qty === undefined ? null : Number(row.qty),
+    shop: String(row.shop || '')
+  };
 }
 
 function openTest_(testId) {
