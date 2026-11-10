@@ -1165,3 +1165,5 @@ dialog .chart-box { max-width: 100%; overflow: hidden; }
 #res-ranking .chips { flex-wrap: wrap; overflow: visible; }
 .emoji-grid--dialog .emoji { background: var(--paper); }
 .emoji-grid--dialog .emoji--on { background: var(--paper); border-color: var(--blue); }
+/* Badges inside history cards keep white text (not the card's grey) */
+.history-card__text .badge { color: #FFFFFF; font-size: .75rem; padding: .15rem .55rem; }
