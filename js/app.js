@@ -260,6 +260,42 @@
     goLogin();
   });
 
+  $('#edit-profile').addEventListener('click', () => {
+    let picked = state.user.emoji;
+    const grid = () => EMOJIS.map(em => `
+      <button type="button" class="emoji${em === picked ? ' emoji--on' : ''}" data-e="${em}" aria-pressed="${em === picked}">${em}</button>`).join('');
+    openDialog({
+      title: 'Edit my name and emoji',
+      ok: 'Save',
+      body: `
+        <label>Your name<input name="name" maxlength="20" autocomplete="off" value="${esc(state.user.displayName)}"></label>
+        <fieldset>
+          <legend>Pick your emoji</legend>
+          <div class="emoji-grid emoji-grid--dialog" id="profile-emoji">${grid()}</div>
+        </fieldset>
+        <label>Or type any emoji <span class="hint">Optional, overrides the one picked above</span><input name="custom" maxlength="8" autocomplete="off" placeholder="Optional" value="${EMOJIS.includes(picked) ? '' : esc(picked)}"></label>`,
+      onOpen: body => {
+        body.querySelector('#profile-emoji').addEventListener('click', e => {
+          const b = e.target.closest('.emoji');
+          if (!b) return;
+          picked = b.dataset.e;
+          body.querySelector('[name=custom]').value = '';
+          body.querySelector('#profile-emoji').innerHTML = grid();
+        });
+      },
+      onOk: async f => {
+        const name = String(f.get('name') || '').trim();
+        if (!name) throw new Error('Add your name.');
+        const emoji = String(f.get('custom') || '').trim() || picked;
+        state.user = await Api.call('updateProfile', { name, emoji });
+        $('#home-emoji').textContent = state.user.emoji;
+        $('#home-name').textContent = `Hello, ${state.user.displayName}`;
+        if (state.user.isAdmin) loadUsers();
+        toast('Saved');
+      }
+    });
+  });
+
   $('#change-pin').addEventListener('click', () => openDialog({
     title: 'Change my PIN',
     body: pinFields(true),

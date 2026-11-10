@@ -1163,3 +1163,5 @@ dialog .chart-box { max-width: 100%; overflow: hidden; }
 #open-admin .row--tight { margin-bottom: 1.25rem; }
 #open-admin .row--tight .btn { margin-bottom: 0; }
 #res-ranking .chips { flex-wrap: wrap; overflow: visible; }
+.emoji-grid--dialog .emoji { background: var(--paper); }
+.emoji-grid--dialog .emoji--on { background: var(--paper); border-color: var(--blue); }
