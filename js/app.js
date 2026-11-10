@@ -198,8 +198,10 @@
     $('#home-name').textContent = `Hello, ${state.user.displayName}`;
     $('#admin-panel').hidden = !state.user.isAdmin;
     $('#create-test').hidden = !state.user.isAdmin;
+    $('#create-open').hidden = !state.user.isAdmin;
     if (state.user.isAdmin) loadUsers();
     loadOpenTests(resume);
+    loadOpenTastings();
   }
 
   const fmtDate = d => {
@@ -375,14 +377,14 @@
 
   // Checkbox list of library products, with a search box. Used when creating
   // a test and when changing its products in the lobby.
-  function productPicker(selectedIds) {
+  function productPicker(selectedIds, single = false) {
     if (!state.products.length) {
       return '<p class="muted">Your product library is empty. Add products from the home screen first. You can also add them to this test later.</p>';
     }
     const sel = new Set(selectedIds);
     return `
       <fieldset class="picker">
-        <legend>Products <span class="hint" id="pick-count"></span></legend>
+        <legend>${single ? 'Product' : 'Products'} <span class="hint" id="pick-count"></span></legend>
         <input class="search" type="search" id="pick-search" placeholder="Search products" aria-label="Search products">
         <ul class="pick-list" id="pick-list">
           ${state.products.map(p => {
@@ -394,7 +396,7 @@
             return `
               <li data-hay="${esc(hay)}">
                 <label>
-                  <input type="checkbox" name="productIds" value="${esc(p.productId)}"${sel.has(p.productId) ? ' checked' : ''}>
+                  <input type="${single ? 'radio' : 'checkbox'}" name="${single ? 'productId' : 'productIds'}" value="${esc(p.productId)}"${sel.has(p.productId) ? ' checked' : ''}>
                   <span class="pick__pic">${pic}</span>
                   <span class="pick__text"><strong>${esc(p.name)}</strong><span>${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span></span>
                 </label>
@@ -409,7 +411,8 @@
     if (!list) return;
     const count = () => {
       const n = list.querySelectorAll('input:checked').length;
-      body.querySelector('#pick-count').textContent = n ? `${n} chosen` : 'None chosen yet';
+      const single = !!list.querySelector('input[type=radio]');
+      body.querySelector('#pick-count').textContent = single ? (n ? '' : 'Pick one') : n ? `${n} chosen` : 'None chosen yet';
     };
     list.addEventListener('change', count);
     body.querySelector('#pick-search').addEventListener('input', e => {
@@ -1071,7 +1074,7 @@
           ? `<img src="${esc(t.winner.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🏆'}</span>
         <span class="history-card__text">
           <strong>${esc(t.name)}</strong>
-          <span>${esc(fmtDate(t.testDate))}${t.source === 'paper' ? ' <span class="badge badge--paper">From paper</span>' : ''}</span>
+          <span>${esc(fmtDate(t.testDate))}${t.source === 'paper' ? ' <span class="badge badge--paper">From paper</span>' : ''}${t.source === 'open' ? ` <span class="badge badge--open">${t.isOpen ? 'Open now' : 'Open tasting'}</span>` : ''}</span>
           <span>${plural(t.sampleCount, 'sample')}, ${plural(t.tasterCount, 'taster')}</span>
           ${t.winner ? `<span class="history-card__win">🏆 ${esc(t.winner.name)}</span>` : ''}
         </span>
@@ -1090,6 +1093,8 @@
   $('#results-back').addEventListener('click', () => {
     if (results.from === 'live' && lobby.testId) return openLobby(lobby.testId);
     if (results.from === 'history') return goHistory();
+    if (results.from === 'reviews') return goReviews();
+    if (results.from === 'open' && openT.testId) return openOpenTasting(openT.testId);
     goHome();
   });
 
@@ -1123,7 +1128,7 @@
   function renderResults() {
     const { data, stats } = results;
     const t = data.test;
-    $('#res-eyebrow').textContent = t.source === 'paper' ? 'From paper' : 'Results';
+    $('#res-eyebrow').textContent = t.source === 'paper' ? 'From paper' : t.source === 'open' ? (t.isOpen ? 'Open tasting, still open' : 'Open tasting') : 'Results';
     $('#res-title').textContent = t.name;
     $('#res-meta').textContent = `${fmtDate(t.testDate)}. ${plural(stats.samples.length, 'sample')}, ${plural(stats.tasters.length, 'taster')}` +
       (t.organiser ? `. Run by ${t.organiser.emoji} ${t.organiser.displayName}` : '') + '.';
@@ -1132,7 +1137,45 @@
     renderCharts();
     renderTasterProfiles();
     renderNotes();
+    renderResultsAdmin();
   }
+
+  function renderResultsAdmin() {
+    const panel = $('#res-admin');
+    const t = results.data.test;
+    panel.hidden = !state.user.isAdmin;
+    if (panel.hidden) return;
+    const canConvert = t.source !== 'open';
+    panel.innerHTML = `
+      <h2>Admin</h2>
+      ${canConvert ? `
+        <p class="muted">Turn this into an open tasting so more people can add scores, and you can add more products. Everyone's scores so far are kept.</p>
+        <button class="btn btn--ghost" type="button" data-res-admin="convert">Turn into an open tasting</button>` : ''}
+      <p class="muted">Deleting removes this test and all its scores, notes and guesses for good. The products stay in your library.</p>
+      <button class="btn btn--ghost btn--danger" type="button" data-res-admin="delete">Delete this test</button>`;
+  }
+
+  $('#res-admin').addEventListener('click', async e => {
+    const b = e.target.closest('[data-res-admin]');
+    if (!b) return;
+    const t = results.data.test;
+    if (b.dataset.resAdmin === 'convert') {
+      if (!confirm(`Turn "${t.name}" into an open tasting? It will appear on everyone's home screen for more scores.`)) return;
+      try {
+        await Api.call('convertToOpen', { testId: t.testId });
+        toast('Now an open tasting');
+        openOpenTasting(t.testId);
+      } catch (x) { toast(x.message); }
+    }
+    if (b.dataset.resAdmin === 'delete') {
+      if (!confirm(`Delete "${t.name}" and all its scores? This can't be undone.`)) return;
+      try {
+        await Api.call('deleteTest', { testId: t.testId });
+        toast('Test deleted');
+        goHistory();
+      } catch (x) { toast(x.message); }
+    }
+  });
 
   // ── Ranking ──
   function renderRanking() {
@@ -1453,6 +1496,685 @@
     return names.length > 1 ? names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1] : names[0] || '';
   }
 
+  // ─── Reviews ─────────────────────────────────────────────────────────────
+  const reviews = { list: [], types: [], filter: 'all', search: '', sort: 'total', onlyMine: false, compare: [], chart: null };
+
+  $('#open-reviews').addEventListener('click', goReviews);
+  $('#reviews-back').addEventListener('click', () => goHome());
+
+  async function goReviews() {
+    show('screen-reviews');
+    $('#review-grid').innerHTML = '<p class="loading">Fetching reviews…</p>';
+    $('#review-count').textContent = '';
+    try {
+      const r = await Api.call('listReviews');
+      reviews.list = r.products;
+      reviews.types = r.types;
+    } catch (e) {
+      $('#review-grid').innerHTML = `<p class="error">${esc(e.message)}</p>`;
+      return;
+    }
+    const ids = new Set(reviews.list.map(p => p.productId));
+    reviews.compare = reviews.compare.filter(id => ids.has(id));
+    renderReviews();
+  }
+
+  const rTypeOf = id => reviews.types.find(t => t.typeId === id) || { name: '', icon: '🍽️' };
+  const rTotal = p => (p.nice == null || p.auth == null ? -1 : p.nice + p.auth);
+  const myTotal = p => (p.mine ? (p.mine.nice ?? 0) + (p.mine.auth ?? 0) : -1);
+  const verdict = m => {
+    if (!m || m.nice == null) return '';
+    if (m.nice >= 4) return '👍 You liked it';
+    if (m.nice <= 2) return '👎 Not for you';
+    return '🤷 You were so-so';
+  };
+
+  function renderReviews() {
+    const used = new Set(reviews.list.map(p => p.typeId));
+    const types = reviews.types.filter(t => used.has(t.typeId));
+    if (reviews.filter !== 'all' && !used.has(reviews.filter)) reviews.filter = 'all';
+    $('#review-types').innerHTML = [{ typeId: 'all', name: 'All', icon: '' }, ...types].map(t => {
+      const on = reviews.filter === t.typeId;
+      return `<button type="button" class="chip${on ? ' chip--on' : ''}" data-type="${esc(t.typeId)}" aria-pressed="${on}">${t.icon ? esc(t.icon) + ' ' : ''}${esc(t.name)}</button>`;
+    }).join('');
+
+    const q = reviews.search.toLowerCase();
+    let list = reviews.list.filter(p =>
+      (reviews.filter === 'all' || p.typeId === reviews.filter) &&
+      (!reviews.onlyMine || p.mine) &&
+      (!q || [p.name, p.manufacturer, p.vintage, p.productLine, p.description, rTypeOf(p.typeId).name].join(' ').toLowerCase().includes(q)));
+
+    const sorters = {
+      total: (a, b) => rTotal(b) - rTotal(a),
+      nice: (a, b) => (b.nice ?? -1) - (a.nice ?? -1),
+      auth: (a, b) => (b.auth ?? -1) - (a.auth ?? -1),
+      mine: (a, b) => myTotal(b) - myTotal(a),
+      recent: (a, b) => String(b.lastTasted).localeCompare(String(a.lastTasted)),
+      name: (a, b) => a.name.localeCompare(b.name)
+    };
+    list = [...list].sort(sorters[reviews.sort]);
+
+    $('#review-count').textContent = reviews.list.length
+      ? `${plural(list.length, 'product')}${list.length !== reviews.list.length ? ` of ${reviews.list.length}` : ''}` : '';
+
+    $('#review-grid').innerHTML = list.length ? list.map(p => {
+      const t = rTypeOf(p.typeId);
+      const picked = reviews.compare.includes(p.productId);
+      return `
+        <div class="review-card${picked ? ' review-card--picked' : ''}">
+          <button type="button" class="review-card__main" data-review="${esc(p.productId)}">
+            <span class="review-card__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(t.icon)}</span>
+            <span class="review-card__body">
+              <strong>${esc(p.name)}</strong>
+              <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
+              <span class="review-card__scores"><span>😋 <b>${fmtAvg(p.nice)}</b></span><span>🎯 <b>${fmtAvg(p.auth)}</b></span></span>
+              <span class="review-card__mine">${p.mine ? `${verdict(p.mine)}: 😋 ${fmtAvg(p.mine.nice)} 🎯 ${fmtAvg(p.mine.auth)}` : "You haven't tasted it"}</span>
+              <span class="review-card__meta">${plural(p.appearances.length, 'test')}, last on ${esc(fmtDate(p.lastTasted))}</span>
+            </span>
+          </button>
+          <label class="review-card__compare"><input type="checkbox" data-compare="${esc(p.productId)}"${picked ? ' checked' : ''}> Compare</label>
+        </div>`;
+    }).join('') : `<p class="empty">${reviews.list.length ? 'Nothing matches that.' : 'Nothing has been tasted yet. Products appear here once a test finishes.'}</p>`;
+
+    renderCompareBar();
+  }
+
+  function renderCompareBar() {
+    const n = reviews.compare.length;
+    $('#compare-bar').hidden = n === 0;
+    $('#compare-count').textContent = n === 1 ? '1 chosen. Pick another to compare' : `${n} chosen`;
+    $('#compare-go').disabled = n < 2;
+  }
+
+  $('#review-types').addEventListener('click', e => {
+    const b = e.target.closest('[data-type]');
+    if (b) { reviews.filter = b.dataset.type; renderReviews(); }
+  });
+  $('#review-search').addEventListener('input', e => { reviews.search = e.target.value.trim(); renderReviews(); });
+  $('#review-sort').addEventListener('change', e => { reviews.sort = e.target.value; renderReviews(); });
+  $('#review-mine').addEventListener('change', e => { reviews.onlyMine = e.target.checked; renderReviews(); });
+
+  $('#review-grid').addEventListener('click', e => {
+    const b = e.target.closest('[data-review]');
+    if (b) openReviewDetail(b.dataset.review);
+  });
+
+  $('#review-grid').addEventListener('change', e => {
+    const box = e.target.closest('[data-compare]');
+    if (!box) return;
+    const id = box.dataset.compare;
+    if (box.checked) {
+      if (reviews.compare.length >= 4) {
+        box.checked = false;
+        return toast('You can compare up to four at a time');
+      }
+      reviews.compare.push(id);
+    } else {
+      reviews.compare = reviews.compare.filter(x => x !== id);
+    }
+    box.closest('.review-card').classList.toggle('review-card--picked', box.checked);
+    renderCompareBar();
+  });
+
+  $('#compare-clear').addEventListener('click', () => { reviews.compare = []; renderReviews(); });
+  $('#compare-go').addEventListener('click', openCompare);
+
+  async function openReviewDetail(productId) {
+    const p = reviews.list.find(x => x.productId === productId);
+    if (!p) return;
+    let detail;
+    try {
+      detail = await Api.call('getProductReview', { productId });
+    } catch (e) {
+      return toast(e.message);
+    }
+    const t = rTypeOf(p.typeId);
+    const others = p.productLine
+      ? reviews.list.filter(x => x.productLine === p.productLine && x.productId !== p.productId)
+          .sort((a, b) => String(b.vintage).localeCompare(String(a.vintage)))
+      : [];
+    const cloud = Object.keys(detail.notes).map(word => ({ word, count: detail.notes[word] }))
+      .sort((a, b) => b.count - a.count).slice(0, 30);
+
+    openDialog({
+      title: p.name,
+      ok: 'Done',
+      wide: true,
+      noCancel: true,
+      body: `
+        <div class="detail-head">
+          <span class="detail-head__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" referrerpolicy="no-referrer">` : esc(t.icon)}</span>
+          <div>
+            <p class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}${t.name ? '. ' + esc(t.icon + ' ' + t.name) : ''}</p>
+            <p class="detail-head__scores">😋 ${fmtAvg(p.nice)} &nbsp; 🎯 ${fmtAvg(p.auth)}</p>
+            <p class="muted">${plural(p.ratings, 'rating')}${p.mine ? `. ${verdict(p.mine)}` : ''}</p>
+          </div>
+        </div>
+        ${p.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(p.description)}</p>` : ''}
+
+        <h3 class="org-sub">Tasted in</h3>
+        <ul class="appearances">${p.appearances.map(a => `
+          <li>
+            <span><strong>${esc(a.testName)}</strong><span class="muted">${esc(fmtDate(a.testDate))}${a.source === 'paper' ? ', from paper' : a.source === 'open' ? ', open tasting' : ''}</span></span>
+            <span class="appearances__scores">😋 ${fmtAvg(a.nice)} 🎯 ${fmtAvg(a.auth)}</span>
+            <button type="button" class="link" data-open-test="${esc(a.testId)}">Results</button>
+          </li>`).join('')}
+        </ul>
+
+        ${others.length ? `
+          <h3 class="org-sub">Other vintages</h3>
+          <div class="vintages">${others.map(o => `
+            <button type="button" class="chip" data-other="${esc(o.productId)}">${esc(o.vintage || o.name)}: 😋 ${fmtAvg(o.nice)} 🎯 ${fmtAvg(o.auth)}</button>`).join('')}
+          </div>` : ''}
+
+        <h3 class="org-sub">What everyone said</h3>
+        <ul class="detail-scores">${detail.scores.map(r => `
+          <li>
+            <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}</span>
+            <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+            ${p.appearances.length > 1 ? `<span class="detail-scores__extra">${esc(r.testName)}</span>` : ''}
+            ${r.guess ? `<span class="detail-scores__extra">Guessed “${esc(r.guess)}”${r.guessCorrect === true ? ' ✅' : r.guessCorrect === false ? ' ❌' : ''}</span>` : ''}
+            ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
+          </li>`).join('')}
+        </ul>
+        ${cloud.length ? `<h3 class="org-sub">Notes of…</h3>${cloudHTML(cloud)}` : ''}`,
+      onOk: async () => {}
+    });
+  }
+
+  // Links inside the review detail (one listener, since the dialog body is reused)
+  $('#dialog-body').addEventListener('click', e => {
+    const testBtn = e.target.closest('[data-open-test]');
+    if (testBtn) {
+      $('#dialog').close();
+      return openResults(testBtn.dataset.openTest, 'reviews');
+    }
+    const other = e.target.closest('[data-other]');
+    if (other) {
+      $('#dialog').close();
+      openReviewDetail(other.dataset.other);
+    }
+  });
+
+  function openCompare() {
+    const picks = reviews.compare.map(id => reviews.list.find(p => p.productId === id)).filter(Boolean);
+    if (picks.length < 2) return;
+    const rows = [
+      ['Overall', p => (rTotal(p) < 0 ? null : rTotal(p) / 2), true],
+      ['😋 Nice', p => p.nice, true],
+      ['🎯 True', p => p.auth, true],
+      ['You 😋', p => (p.mine ? p.mine.nice : null), true],
+      ['You 🎯', p => (p.mine ? p.mine.auth : null), true],
+      ['Ratings', p => p.ratings, false],
+      ['Tests', p => p.appearances.length, false]
+    ];
+    const cell = (v, best, isScore) => `<td${best ? ' class="best"' : ''}>${v == null ? '–' : isScore ? fmtAvg(v) : v}</td>`;
+
+    openDialog({
+      title: 'Compare',
+      ok: 'Done',
+      wide: true,
+      noCancel: true,
+      body: `
+        <div class="table-wrap">
+          <table class="compare-table">
+            <thead><tr><th></th>${picks.map(p => `
+              <th scope="col">
+                <span class="compare-table__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" referrerpolicy="no-referrer">` : esc(rTypeOf(p.typeId).icon)}</span>
+                <span>${esc(p.name)}</span>
+                <span class="muted">${esc(p.manufacturer)}${p.vintage ? ', ' + esc(p.vintage) : ''}</span>
+              </th>`).join('')}</tr></thead>
+            <tbody>${rows.map(([label, fn, isScore]) => {
+              const vals = picks.map(fn);
+              const top = Math.max(...vals.filter(v => v != null));
+              return `<tr><th scope="row">${label}</th>${vals.map(v => cell(v, isScore && v != null && v === top && vals.filter(x => x != null).length > 1, isScore)).join('')}</tr>`;
+            }).join('')}
+            </tbody>
+          </table>
+        </div>
+        <p class="muted">Overall is the average of niceness (😋) and authenticity (🎯). “You” is your own score. The best in each row is highlighted.</p>
+        ${typeof window.Chart !== 'undefined' ? '<div class="chart-box"><canvas id="chart-compare" role="img" aria-label="Niceness and authenticity compared"></canvas></div>' : ''}`,
+      onOpen: () => {
+        if (typeof window.Chart === 'undefined') return;
+        if (reviews.chart) reviews.chart.destroy();
+        const c = chartColours();
+        Chart.defaults.color = c.muted;
+        Chart.defaults.borderColor = c.line;
+        Chart.defaults.font.family = c.body;
+        reviews.chart = new Chart($('#chart-compare'), {
+          type: 'bar',
+          data: {
+            labels: picks.map(p => (p.vintage ? `${p.name} (${p.vintage})` : p.name)),
+            datasets: [
+              { label: 'Niceness', data: picks.map(p => p.nice), backgroundColor: c.red, borderRadius: 4 },
+              { label: 'Authenticity', data: picks.map(p => p.auth), backgroundColor: c.green, borderRadius: 4 }
+            ]
+          },
+          options: { maintainAspectRatio: false, scales: { y: { min: 0, max: 5, ticks: { stepSize: 1 } } }, plugins: { legend: { position: 'bottom' } } }
+        });
+      },
+      onOk: async () => {}
+    });
+  }
+
+  // ─── Open tastings ───────────────────────────────────────────────────────
+  const openT = { testId: null, data: null, expanded: null, form: null, dup: new Set() };
+
+  async function loadOpenTastings() {
+    let list;
+    try {
+      list = await Api.call('listOpenTastings');
+    } catch (e) {
+      return;
+    }
+    if ($('#screen-home').hidden) return;
+    $('#open-tastings-wrap').hidden = !list.length;
+    $('#open-tastings').innerHTML = list.map(t => {
+      const left = t.productCount - t.myCount;
+      return `
+      <div class="test-card test-card--open">
+        <span class="pic-stack">${t.products.map(p =>
+          `<span class="test-card__pic">${p.photoUrl ? `<img src="${esc(p.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : '🍽️'}</span>`).join('')}</span>
+        <div class="test-card__info">
+          <p class="test-card__name">${esc(t.name)}</p>
+          <p class="test-card__meta">${plural(t.productCount, 'product')}, ${plural(t.ratings, 'rating')}</p>
+          <p class="test-card__meta test-card__progress">${t.myCount === t.productCount ? `✓ You've rated all ${t.productCount}` : `You've rated ${t.myCount} of ${t.productCount}`}</p>
+        </div>
+        <button class="btn${left ? '' : ' btn--light'}" type="button" data-open-tasting="${esc(t.testId)}">${left ? 'Rate' : 'View'}</button>
+      </div>`;
+    }).join('');
+  }
+
+  $('#open-tastings').addEventListener('click', e => {
+    const b = e.target.closest('[data-open-tasting]');
+    if (b) openOpenTasting(b.dataset.openTasting);
+  });
+  $('#open-back').addEventListener('click', () => goHome());
+
+  // ── Creating one (admins) ──
+  $('#create-open').addEventListener('click', async () => {
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      return toast(e.message);
+    }
+    openCreateOpen([]);
+  });
+
+  function openCreateOpen(preselect) {
+    const today = new Date();
+    const iso = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    const suggest = p => `${p.manufacturer} ${p.name}`.trim();
+    const one = preselect.length === 1 ? state.products.find(p => p.productId === preselect[0]) : null;
+
+    openDialog({
+      title: 'Start an open tasting',
+      ok: 'Start it',
+      wide: true,
+      body: `
+        <p class="muted">Known products that anyone can score, whenever they get round to it. Start with one or several, and add more as new packs turn up.</p>
+        <label>Name<input name="name" maxlength="60" value="${esc(one ? suggest(one) : '')}" placeholder="Mince Pie Season 2026"></label>
+        <label>Started on<input name="testDate" type="date" value="${iso}"></label>
+        <label class="check"><input type="checkbox" name="halfPoints" checked> Allow half points</label>
+        ${productPicker(preselect)}
+        <button type="button" class="link" id="open-new-product">Not in the library? Add a new product</button>`,
+      onOpen: body => {
+        wirePicker(body);
+        const nameI = body.querySelector('[name=name]');
+        let typed = false;
+        nameI.addEventListener('input', () => { typed = true; });
+        const list = body.querySelector('#pick-list');
+        if (list) list.addEventListener('change', () => {
+          if (typed && nameI.value.trim()) return;
+          const ticked = [...list.querySelectorAll('input:checked')].map(i => state.products.find(p => p.productId === i.value)).filter(Boolean);
+          nameI.value = ticked.length === 1 ? suggest(ticked[0]) : '';
+        });
+        body.querySelector('#open-new-product').addEventListener('click', () => {
+          const ticked = list ? [...list.querySelectorAll('input:checked')].map(i => i.value) : [];
+          openProduct(null, async saved => {
+            try { state.products = await Api.call('listProducts'); } catch (e) { /* keep what we have */ }
+            openCreateOpen([...ticked, saved.productId]);
+          });
+        });
+      },
+      onOk: async f => {
+        const ids = f.getAll('productIds');
+        if (!ids.length) throw new Error('Pick at least one product.');
+        if (!String(f.get('name') || '').trim()) throw new Error('Give it a name.');
+        const r = await Api.call('createOpenTasting', {
+          name: f.get('name'), testDate: f.get('testDate'),
+          halfPoints: f.get('halfPoints') === 'on', productIds: ids
+        });
+        toast('Open tasting started. Everyone can rate now');
+        openOpenTasting(r.testId);
+      }
+    });
+  }
+
+  // ── The tasting page ──
+  async function openOpenTasting(testId, keepExpanded = false) {
+    if ($('#screen-open').hidden || openT.testId !== testId) {
+      show('screen-open');
+      $('#open-name').textContent = 'Loading…';
+      ['open-product', 'open-form', 'open-scores', 'open-admin'].forEach(id => { $('#' + id).hidden = true; });
+    }
+    if (openT.testId !== testId || !keepExpanded) openT.expanded = null;
+    openT.testId = testId;
+    let d;
+    try {
+      d = await Api.call('getOpenTasting', { testId });
+    } catch (e) {
+      $('#open-name').textContent = 'Oops';
+      $('#open-meta').textContent = e.message;
+      return;
+    }
+    openT.data = d;
+    if (openT.expanded && !d.items.some(i => i.sampleNo === openT.expanded)) openT.expanded = null;
+    renderOpenTasting();
+  }
+
+  // When several products share a name ("Mince Pies"), lead with the maker
+  const openTitle = it => (openT.dup.has(it.name.toLowerCase()) ? `${it.manufacturer} ${it.name}` : it.name);
+  const openSub = it => (openT.dup.has(it.name.toLowerCase()) ? it.vintage : [it.manufacturer, it.vintage].filter(Boolean).join(', '));
+
+  function renderOpenTasting() {
+    const d = openT.data;
+    const total = d.items.length;
+    const seen = {};
+    d.items.forEach(i => { const k = i.name.toLowerCase(); seen[k] = (seen[k] || 0) + 1; });
+    openT.dup = new Set(Object.keys(seen).filter(k => seen[k] > 1));
+    $('#open-status').textContent = d.isOpen ? 'Open tasting' : 'Closed';
+    $('#open-name').textContent = d.name;
+    $('#open-meta').textContent = `Started ${fmtDate(d.testDate)}${d.organiser ? ' by ' + nameOf(d.organiser) : ''}. ` +
+      `${plural(total, 'product')}, ${plural(d.tasterCount, 'taster')} so far.`;
+
+    // Progress
+    const pp = $('#open-product');
+    pp.hidden = false;
+    pp.className = 'panel progress-panel';
+    const pct = total ? Math.round((d.myCount / total) * 100) : 0;
+    pp.innerHTML = `
+      <p class="progress-panel__count">${d.myCount === total && total ? `✓ You've rated all ${total}!` : `You've rated <strong>${d.myCount}</strong> of <strong>${total}</strong>`}</p>
+      <span class="bar bar--big"><span class="bar__fill bar__fill--n" style="width:${pct}%"></span></span>
+      <p class="muted">${d.isOpen ? 'Tap a product to rate it, or to see what everyone else thought.' : 'This tasting is closed. Tap a product to see everyone’s scores.'}</p>`;
+
+    // Products (accordion)
+    const lp = $('#open-form');
+    lp.hidden = false;
+    lp.innerHTML = `<h2>The products</h2><ul class="open-items">${d.items.map(itemHTML).join('')}</ul>`;
+    if (openT.expanded) {
+      const item = d.items.find(i => i.sampleNo === openT.expanded);
+      if (item && d.isOpen) {
+        renderOpenStars('nice');
+        renderOpenStars('auth');
+        renderOpenChips();
+        if (live.vocab) fillOpenVocab();
+        else Api.call('noteVocab').then(v => { live.vocab = v; fillOpenVocab(); }).catch(() => {});
+      }
+    }
+
+    // Leaderboard
+    const sp = $('#open-scores');
+    const rated = d.items.filter(i => i.nice != null && i.auth != null).sort((a, b) => (b.nice + b.auth) - (a.nice + a.auth));
+    sp.hidden = !rated.length;
+    sp.innerHTML = rated.length ? `
+      <h2>Leaderboard</h2>
+      <p class="muted">Ranked by niceness plus authenticity, so far.</p>
+      <ul class="sofar">${rated.map((r, i) => `
+        <li>
+          <span class="sofar__rank">${['🥇', '🥈', '🥉'][i] || i + 1}</span>
+          <span class="pick__pic">${r.photoUrl ? `<img src="${esc(r.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(r.typeIcon || '🍽️')}</span>
+          <span class="pick__text"><strong>${esc(openTitle(r))}</strong><span>${plural(r.ratings, 'rating')}</span></span>
+          <span class="sofar__scores"><span>😋 ${fmtAvg(r.nice)}</span><span>🎯 ${fmtAvg(r.auth)}</span></span>
+        </li>`).join('')}
+      </ul>
+      <button class="btn btn--ghost btn--wide" type="button" id="open-results">Full results and stats</button>` : '';
+
+    // Admin
+    const ap = $('#open-admin');
+    ap.hidden = !state.user.isAdmin;
+    ap.innerHTML = d.isOpen
+      ? `<h2>Admin</h2>
+         <p class="muted">Someone turned up with another pack? Add it here and everyone can rate it.</p>
+         <button class="btn" type="button" data-open-set="add">Add a product</button>
+         <p class="muted">Close the tasting once everyone has had a go. You can reopen it later.</p>
+         <button class="btn btn--ghost" type="button" data-open-set="close">Close tasting</button>`
+      : `<h2>Admin</h2><p class="muted">This tasting is closed, so nobody can add scores.</p>
+         <button class="btn btn--ghost" type="button" data-open-set="open">Reopen tasting</button>`;
+  }
+
+  function itemHTML(it) {
+    const d = openT.data;
+    const done = it.mine && it.mine.niceness != null && it.mine.authenticity != null;
+    const open = openT.expanded === it.sampleNo;
+    const cloud = Object.keys(it.notes).map(word => ({ word, count: it.notes[word] })).sort((a, b) => b.count - a.count).slice(0, 25);
+    return `
+      <li class="open-item${open ? ' open-item--open' : ''}${done ? ' open-item--done' : ''}">
+        <button type="button" class="open-item__head" data-item="${it.sampleNo}" aria-expanded="${open}">
+          <span class="pick__pic">${it.photoUrl ? `<img src="${esc(it.photoUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : esc(it.typeIcon || '🍽️')}</span>
+          <span class="open-item__text">
+            <strong>${esc(openTitle(it))}</strong>
+            ${openSub(it) ? `<span class="muted">${esc(openSub(it))}</span>` : ''}
+            <span class="open-item__avg">${it.ratings ? `😋 ${fmtAvg(it.nice)} 🎯 ${fmtAvg(it.auth)} from ${plural(it.ratings, 'rating')}` : 'No ratings yet'}</span>
+          </span>
+          <span class="open-item__status${done ? ' open-item__status--done' : ''}">${done ? `✓ ${fmtScore(it.mine.niceness)} / ${fmtScore(it.mine.authenticity)}` : d.isOpen ? 'To rate' : ''}</span>
+        </button>
+        ${open ? `
+          <div class="open-item__body">
+            ${it.description ? `<p class="reveal__desc"><strong>The packet says:</strong> ${esc(it.description)}</p>` : ''}
+            ${d.isOpen ? `
+              <h3 class="org-sub">😋 How nice is it?</h3>
+              <div class="stars" data-group="nice"></div>
+              <p class="star-label" data-label="nice"></p>
+              <h3 class="org-sub">🎯 Does it taste like the packet says?</h3>
+              <div class="stars" data-group="auth"></div>
+              <p class="star-label" data-label="auth"></p>
+              <div class="notes-field">
+                <label for="open-note-input">Notes of… <span class="hint">What can you taste? Silly is good.</span></label>
+                <div class="note-chips-edit" id="open-note-chips"></div>
+                <div class="note-add">
+                  <input id="open-note-input" list="open-note-vocab" maxlength="40" autocomplete="off" placeholder="e.g. Christmas morning">
+                  <button type="button" class="btn btn--ghost btn--small" id="open-note-add">Add</button>
+                </div>
+                <button type="button" class="link" id="open-note-inspire">✨ Inspire me</button>
+                <datalist id="open-note-vocab"></datalist>
+              </div>
+              <label>Comment<textarea id="open-comment" rows="2" maxlength="500" placeholder="Optional">${esc(it.mine ? it.mine.comment : '')}</textarea></label>
+              <button class="btn btn--wide" type="button" id="open-send">${it.mine ? 'Update my scores' : 'Send my scores'}</button>` : ''}
+            ${it.scores.length ? `
+              <h3 class="org-sub">Everyone's scores</h3>
+              <ul class="detail-scores">${it.scores.map(r => `
+                <li>
+                  <span class="detail-scores__who">${esc(r.user.emoji)} ${esc(r.user.displayName)}${r.isMe ? ' (you)' : ''}</span>
+                  <span class="detail-scores__nums">😋 ${fmtScore(r.niceness)} &nbsp; 🎯 ${fmtScore(r.authenticity)}</span>
+                  ${r.at ? `<span class="detail-scores__extra">${esc(fmtDate(new Date(r.at).toISOString().slice(0, 10)))}</span>` : ''}
+                  ${r.comment ? `<span class="detail-scores__extra">“${esc(r.comment)}”</span>` : ''}
+                </li>`).join('')}
+              </ul>` : ''}
+            ${cloud.length ? `<h3 class="org-sub">Notes of…</h3>${cloudHTML(cloud)}` : ''}
+            ${state.user.isAdmin && d.isOpen && !it.ratings
+              ? `<button type="button" class="link link--danger" data-remove-item="${it.sampleNo}">Remove from this tasting</button>` : ''}
+          </div>` : ''}
+      </li>`;
+  }
+
+  function renderOpenStars(group) {
+    const half = openT.data.halfPoints;
+    const value = openT.form[group];
+    const labels = group === 'nice' ? NICE_LABELS : AUTH_LABELS;
+    let html = '';
+    for (let i = 1; i <= 5; i++) {
+      const fill = value >= i ? 100 : value >= i - 0.5 ? 50 : 0;
+      const hits = half
+        ? `<button type="button" class="star__hit star__hit--l" data-g="${group}" data-v="${i - 0.5}" aria-label="${fmtScore(i - 0.5)} stars"></button>
+           <button type="button" class="star__hit star__hit--r" data-g="${group}" data-v="${i}" aria-label="${i} stars"></button>`
+        : `<button type="button" class="star__hit" data-g="${group}" data-v="${i}" aria-label="${plural(i, 'star')}"></button>`;
+      html += `<span class="star" style="--fill:${fill}%"><span class="star__glyph" aria-hidden="true">★</span>${hits}</span>`;
+    }
+    $(`#open-form [data-group="${group}"]`).innerHTML = html;
+    $(`#open-form [data-label="${group}"]`).textContent = value
+      ? `${fmtScore(value)} ${value > 1 ? 'stars' : 'star'}: ${labelFor(value, labels)}` : 'Tap the stars';
+  }
+
+  function renderOpenChips() {
+    $('#open-note-chips').innerHTML = openT.form.notes.map(n =>
+      `<span class="note-chip">${esc(n)}<button type="button" data-open-note-remove="${esc(n)}" aria-label="Remove ${esc(n)}">×</button></span>`).join('');
+  }
+
+  function fillOpenVocab() {
+    const dl = $('#open-note-vocab');
+    if (dl) dl.innerHTML = (live.vocab || []).map(n => `<option value="${esc(n)}">`).join('');
+  }
+
+  function addOpenNote(raw) {
+    const n = String(raw || '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+    if (!n) return;
+    if (openT.form.notes.length >= 8) return toast("That's plenty of notes!");
+    if (!openT.form.notes.includes(n)) openT.form.notes.push(n);
+    renderOpenChips();
+  }
+
+  function expandItem(sampleNo) {
+    if (openT.expanded === sampleNo) {
+      openT.expanded = null;
+    } else {
+      openT.expanded = sampleNo;
+      const it = openT.data.items.find(i => i.sampleNo === sampleNo);
+      openT.form = {
+        nice: it.mine ? it.mine.niceness : null,
+        auth: it.mine ? it.mine.authenticity : null,
+        notes: it.mine ? [...it.mine.notes] : []
+      };
+    }
+    renderOpenTasting();
+    const el = document.querySelector(`[data-item="${sampleNo}"]`);
+    if (el && openT.expanded) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  $('#screen-open').addEventListener('click', async e => {
+    const head = e.target.closest('[data-item]');
+    if (head) return expandItem(Number(head.dataset.item));
+
+    const star = e.target.closest('[data-g]');
+    if (star) {
+      openT.form[star.dataset.g] = Number(star.dataset.v);
+      return renderOpenStars(star.dataset.g);
+    }
+    const rm = e.target.closest('[data-open-note-remove]');
+    if (rm) {
+      openT.form.notes = openT.form.notes.filter(n => n !== rm.dataset.openNoteRemove);
+      return renderOpenChips();
+    }
+    if (e.target.closest('#open-note-add')) {
+      addOpenNote($('#open-note-input').value);
+      $('#open-note-input').value = '';
+      return;
+    }
+    if (e.target.closest('#open-note-inspire')) {
+      const pool = INSPIRATION.filter(n => !openT.form.notes.includes(n));
+      $('#open-note-input').value = pool[Math.floor(Math.random() * pool.length)] || '';
+      return $('#open-note-input').focus();
+    }
+    if (e.target.closest('#open-results')) return openResults(openT.testId, 'open');
+
+    const removeBtn = e.target.closest('[data-remove-item]');
+    if (removeBtn) {
+      if (!confirm('Remove this product from the tasting?')) return;
+      try {
+        await Api.call('removeOpenProduct', { testId: openT.testId, sampleNo: Number(removeBtn.dataset.removeItem) });
+        toast('Removed');
+        openOpenTasting(openT.testId);
+      } catch (x) { toast(x.message); }
+      return;
+    }
+
+    const set = e.target.closest('[data-open-set]');
+    if (set) {
+      const act = set.dataset.openSet;
+      if (act === 'add') return addToOpenTasting();
+      if (act === 'close' && !confirm('Close this tasting? Nobody will be able to add or change scores.')) return;
+      try {
+        await Api.call('setOpenTasting', { testId: openT.testId, open: act === 'open' });
+        toast(act === 'open' ? 'Tasting reopened' : 'Tasting closed');
+        openOpenTasting(openT.testId);
+      } catch (x) { toast(x.message); }
+      return;
+    }
+
+    if (e.target.closest('#open-send')) {
+      const f = openT.form;
+      if (!f.nice || !f.auth) return toast('Give it both scores first');
+      const pending = $('#open-note-input').value;
+      if (pending.trim()) { addOpenNote(pending); $('#open-note-input').value = ''; }
+      const btn = $('#open-send');
+      btn.disabled = true;
+      btn.textContent = 'Sending…';
+      try {
+        await Api.call('submitOpenScore', {
+          testId: openT.testId, sampleNo: openT.expanded, niceness: f.nice, authenticity: f.auth,
+          comment: $('#open-comment').value, notes: f.notes
+        });
+        live.vocab = null;
+        const d = openT.data;
+        const wasDone = d.items.find(i => i.sampleNo === openT.expanded).mine;
+        const left = d.items.length - d.myCount - (wasDone ? 0 : 1);
+        toast(left > 0 ? `Saved. ${left} more to go!` : 'Saved. You’ve rated them all!');
+        openT.expanded = null;
+        openOpenTasting(openT.testId);
+      } catch (x) {
+        toast(x.message);
+        btn.disabled = false;
+        btn.textContent = 'Send my scores';
+      }
+    }
+  });
+
+  $('#screen-open').addEventListener('keydown', e => {
+    if (e.target.id === 'open-note-input' && (e.key === 'Enter' || e.key === ',')) {
+      e.preventDefault();
+      addOpenNote(e.target.value);
+      e.target.value = '';
+    }
+  });
+
+  async function addToOpenTasting() {
+    try {
+      [state.types, state.products] = await Promise.all([Api.call('listTypes'), Api.call('listProducts')]);
+    } catch (e) {
+      return toast(e.message);
+    }
+    const inIt = new Set(openT.data.items.map(i => i.productId));
+    const all = state.products;
+    state.products = all.filter(p => !inIt.has(p.productId));
+    const picker = productPicker([], true);
+    state.products = all;
+
+    const add = async productId => {
+      await Api.call('addOpenProduct', { testId: openT.testId, productId });
+      toast('Added. Everyone can rate it now');
+      openOpenTasting(openT.testId);
+    };
+
+    openDialog({
+      title: 'Add a product',
+      ok: 'Add it',
+      wide: true,
+      body: `${picker}<button type="button" class="link" id="open-add-new">Not in the library? Add a new product</button>`,
+      onOpen: body => {
+        wirePicker(body);
+        body.querySelector('#open-add-new').addEventListener('click', () => {
+          openProduct(null, async saved => {
+            try { await add(saved.productId); } catch (x) { toast(x.message); }
+          });
+        });
+      },
+      onOk: async f => {
+        if (!f.get('productId')) throw new Error('Pick a product.');
+        await add(f.get('productId'));
+      }
+    });
+  }
+
   // ─── Product library ─────────────────────────────────────────────────────
   Object.assign(state, { types: [], products: [], filter: 'all', search: '' });
   let pendingPhoto = null;
@@ -1532,7 +2254,7 @@
     if (b) openProduct(state.products.find(p => p.productId === b.dataset.id));
   });
 
-  function openProduct(p) {
+  function openProduct(p, afterSave) {
     if (!state.types.length) return toast('Add a type first, like Crisps');
     pendingPhoto = null;
     const v = p || {
@@ -1651,7 +2373,8 @@
 
         const saved = await Api.call('saveProduct', data);
         toast(p ? 'Changes saved' : `${saved.name} added`);
-        goProducts();
+        if (afterSave) afterSave(saved);
+        else goProducts();
       }
     });
   }
@@ -1831,6 +2554,28 @@
     if (!/^\d{4}$/.test(f.get('pin'))) throw new Error('The PIN needs to be 4 digits.');
     if (f.get('pin') !== f.get('pin2')) throw new Error("Those PINs don't match.");
   }
+
+  // ─── Photo lightbox ──────────────────────────────────────────────────────
+  // Tap any product photo to see it big. Runs before other click handlers,
+  // so tapping the photo doesn't also open the card it sits in.
+  const PHOTO_SPOTS = '.pick__pic, .product__pic, .review-card__pic, .history-card__pic, .reveal__pic, .detail-head__pic, .test-card__pic, .compare-table__pic, .photo__preview';
+
+  document.addEventListener('click', e => {
+    const img = e.target.closest('img');
+    if (!img || !img.closest(PHOTO_SPOTS) || img.closest('#crop-dialog') || !img.getAttribute('src')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const holder = img.closest('li, .review-card, .reveal, .history-card, .product, .detail-head, .test-card, th, dialog, .panel');
+    const title = holder && holder.querySelector('strong, h2');
+    const big = $('#lightbox-img');
+    big.src = img.currentSrc || img.src;
+    big.alt = title ? title.textContent.trim() : 'Product photo';
+    $('#lightbox-caption').textContent = title ? title.textContent.trim() : '';
+    $('#lightbox').showModal();
+  }, true);
+
+  $('#lightbox').addEventListener('click', () => $('#lightbox').close());
+  $('#lightbox').addEventListener('close', () => { $('#lightbox-img').removeAttribute('src'); });
 
   boot();
 })();

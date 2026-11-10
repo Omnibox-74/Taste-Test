@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css">
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20261111">
 </head>
 <body>
 <main id="app">
@@ -87,8 +87,14 @@
       <p class="hello"><span id="home-emoji"></span> <span id="home-name"></span></p>
       <h2>Tests to join</h2>
       <div class="test-list" id="open-tests"><p class="loading">Looking for tests…</p></div>
+      <div id="open-tastings-wrap" hidden>
+        <h2 class="home-sub">Open tastings</h2>
+        <div class="test-list" id="open-tastings"></div>
+      </div>
       <div class="row">
         <button class="btn" type="button" id="create-test" hidden>Create a test</button>
+        <button class="btn" type="button" id="create-open" hidden>Start an open tasting</button>
+        <button class="btn btn--light" type="button" id="open-reviews">🔎 Reviews</button>
         <button class="btn btn--light" type="button" id="open-history">Past tests</button>
         <button class="btn btn--ghost" type="button" id="change-pin">Change my PIN</button>
       </div>
@@ -157,6 +163,57 @@
     <section class="panel" id="sofar-panel" hidden></section>
   </section>
 
+  <section class="screen" id="screen-open" hidden>
+    <header class="topbar">
+      <button class="link" type="button" id="open-back">Home</button>
+      <span class="brand brand--small">Taste Test</span>
+    </header>
+    <div class="packet packet--green packet--slim">
+      <p class="eyebrow" id="open-status"></p>
+      <h1 class="screen-title" id="open-name">Loading…</h1>
+      <p class="lobby-meta" id="open-meta"></p>
+    </div>
+    <section class="panel reveal" id="open-product" hidden></section>
+    <section class="panel" id="open-form" hidden></section>
+    <section class="panel" id="open-scores" hidden></section>
+    <section class="panel" id="open-admin" hidden></section>
+  </section>
+
+  <section class="screen" id="screen-reviews" hidden>
+    <header class="topbar">
+      <button class="link" type="button" id="reviews-back">Home</button>
+      <span class="brand brand--small">Taste Test</span>
+    </header>
+    <div class="packet packet--green packet--slim">
+      <h1 class="screen-title">Reviews</h1>
+      <p class="lobby-meta">Everything we've tasted, and how it scored. Handy in the shop.</p>
+    </div>
+
+    <input class="search" id="review-search" type="search" placeholder="Search by name, maker, flavour or year" aria-label="Search reviews">
+    <div class="chips" id="review-types" role="group" aria-label="Filter by type"></div>
+    <div class="review-tools">
+      <label class="review-sort">Sort
+        <select id="review-sort">
+          <option value="total">Best overall</option>
+          <option value="nice">Tastiest</option>
+          <option value="auth">Most authentic</option>
+          <option value="mine">My favourites</option>
+          <option value="recent">Recently tasted</option>
+          <option value="name">A to Z</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="review-mine"> Only ones I've tasted</label>
+    </div>
+    <p class="muted review-count" id="review-count"></p>
+    <div class="reviews" id="review-grid"></div>
+
+    <div class="compare-bar" id="compare-bar" hidden>
+      <span id="compare-count"></span>
+      <button class="link" type="button" id="compare-clear">Clear</button>
+      <button class="btn btn--small" type="button" id="compare-go">Compare</button>
+    </div>
+  </section>
+
   <section class="screen" id="screen-history" hidden>
     <header class="topbar">
       <button class="link" type="button" id="history-back">Home</button>
@@ -191,6 +248,7 @@
     <section class="panel" id="res-charts"></section>
     <section class="panel" id="res-tasters"></section>
     <section class="panel" id="res-notes"></section>
+    <section class="panel" id="res-admin" hidden></section>
   </section>
 
   <section class="screen" id="screen-products" hidden>
@@ -248,13 +306,19 @@
   </div>
 </dialog>
 
+<dialog id="lightbox" aria-label="Photo">
+  <button type="button" class="lightbox__close" aria-label="Close">×</button>
+  <img id="lightbox-img" alt="">
+  <p class="lightbox__caption" id="lightbox-caption"></p>
+</dialog>
+
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js"></script>
-<script src="js/config.js"></script>
-<script src="js/api.js"></script>
-<script src="js/stats.js"></script>
-<script src="js/app.js"></script>
+<script src="js/config.js?v=20261111"></script>
+<script src="js/api.js?v=20261111"></script>
+<script src="js/stats.js?v=20261111"></script>
+<script src="js/app.js?v=20261111"></script>
 </body>
 </html>
